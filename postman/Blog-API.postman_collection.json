@@ -1,0 +1,1325 @@
+{
+  "info": {
+    "_postman_id": "b7d1c2f4-5a3e-4c9b-9f21-7e6a0d3c8b15",
+    "name": "Blog API - Node.js + Express (Task 2)",
+    "description": "Complete Postman collection for the MERN blog platform REST API (Task 2).\n\n## How to use\n1. Start the backend: `cd backend` then `npm run dev`\n2. Confirm the server is on http://localhost:5000 (change the `baseUrl` collection variable if needed)\n3. Run a folder with the Collection Runner, or send requests one by one\n\n## Folders\n- **Health Check** - quick server status\n- **Posts** - GET all (paginated), GET by id, POST, PUT, DELETE\n- **Comments** - GET comments of a post, POST comment, DELETE comment\n- **Error Cases** - 400 validation errors, 404 missing resources, unknown routes, malformed JSON\n\n## Notes\n- Data is stored **in memory**: restarting the server resets everything to the seed data.\n- Routes work both with and without the `/api` prefix (e.g. `/posts` and `/api/posts`).\n- `createdPostId` / `createdCommentId` are filled in automatically by the create requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "description": "Verifies that the API process is running.",
+      "item": [
+        {
+          "name": "GET Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Body reports success', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.message).to.include('running');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "health"]
+            },
+            "description": "Returns the API status, environment and current timestamp."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Posts",
+      "description": "CRUD endpoints for the /posts resource. 10 posts per page.",
+      "item": [
+        {
+          "name": "GET All Posts (paginated)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Returns at most 10 posts per page', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.posts).to.be.an('array');",
+                  "    pm.expect(json.posts.length).to.be.at.most(10);",
+                  "});",
+                  "",
+                  "pm.test('Contains pagination metadata', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json).to.have.property('currentPage');",
+                  "    pm.expect(json).to.have.property('totalPosts');",
+                  "    pm.expect(json).to.have.property('totalPages');",
+                  "    pm.expect(json).to.have.property('postsPerPage').that.eql(10);",
+                  "});",
+                  "",
+                  "pm.test('Responds in under 1000 ms', function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(1000);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts"]
+            },
+            "description": "Returns page 1 (default) with 10 posts plus pagination info: currentPage, totalPosts, totalPages, posts."
+          },
+          "response": []
+        },
+        {
+          "name": "GET Posts - Page 1 (?page=1)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('currentPage is 1', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.currentPage).to.eql(1);",
+                  "});",
+                  "",
+                  "pm.test('hasPrevPage is false on the first page', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.hasPrevPage).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts?page=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "1-based page number. Invalid values fall back to page 1."
+                }
+              ]
+            },
+            "description": "Explicit page 1 request."
+          },
+          "response": []
+        },
+        {
+          "name": "GET Posts - Page 2 (?page=2)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('currentPage is 2', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.currentPage).to.eql(2);",
+                  "});",
+                  "",
+                  "pm.test('Page 2 holds the remaining posts (max 10)', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.posts.length).to.be.at.most(10);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts?page=2",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "2"
+                }
+              ]
+            },
+            "description": "Seed data contains 12 posts, so page 2 returns the last 2 posts with hasNextPage = false."
+          },
+          "response": []
+        },
+        {
+          "name": "GET Posts - Out Of Range Page (?page=99)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Empty posts array for an out-of-range page', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.posts).to.be.an('array').that.is.empty;",
+                  "    pm.expect(json.count).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts?page=99",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "99"
+                }
+              ]
+            },
+            "description": "A page beyond totalPages is valid but returns no posts."
+          },
+          "response": []
+        },
+        {
+          "name": "GET Post By Id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Returns a single post object', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.post).to.be.an('object');",
+                  "    pm.expect(json.post).to.have.property('title');",
+                  "    pm.expect(json.post).to.have.property('body');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts/{{postId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "{{postId}}"]
+            },
+            "description": "Returns the post with the given id, or 404 when it does not exist."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Create Post",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 201 Created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Returns the created post with a generated id', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.post.id).to.be.a('number');",
+                  "    pm.expect(json.post.title).to.eql('My First Post From Postman');",
+                  "    pm.expect(json.post).to.have.property('createdAt');",
+                  "});",
+                  "",
+                  "// Save the new id so the PUT and DELETE requests can reuse it",
+                  "const json = pm.response.json();",
+                  "if (json.post && json.post.id) {",
+                  "    pm.collectionVariables.set('createdPostId', String(json.post.id));",
+                  "    console.log('Saved createdPostId =', json.post.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"My First Post From Postman\",\n  \"body\": \"This post was created with the Postman collection.\",\n  \"author\": \"Postman Tester\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts"]
+            },
+            "description": "Creates a new post. title and body are required; author is optional. Saves the new id in the createdPostId collection variable."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT Update Post",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Fall back to a seed post when this request is sent on its own",
+                  "if (!pm.collectionVariables.get('createdPostId')) {",
+                  "    pm.collectionVariables.set('createdPostId', '1');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Post was updated', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.post.title).to.eql('Updated Title From Postman');",
+                  "    pm.expect(json.post).to.have.property('updatedAt');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Updated Title From Postman\",\n  \"body\": \"The body of this post has been replaced by a PUT request.\",\n  \"author\": \"Postman Tester\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts/{{createdPostId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "{{createdPostId}}"]
+            },
+            "description": "Replaces the title and body of an existing post. Returns 400 for invalid data and 404 when the post is missing."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE Delete Post",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('createdPostId')) {",
+                  "    pm.collectionVariables.set('createdPostId', '1');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Success response with the deleted post', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.deletedPost).to.be.an('object');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts/{{createdPostId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "{{createdPostId}}"]
+            },
+            "description": "Deletes a post and any comments that belong to it. Returns 404 when the post does not exist."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Comments",
+      "description": "Comment endpoints: nested under a post for create/read, standalone for delete.",
+      "item": [
+        {
+          "name": "GET Comments For Post",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Returns a comments array for the post', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.comments).to.be.an('array');",
+                  "    pm.expect(json).to.have.property('totalComments');",
+                  "});",
+                  "",
+                  "pm.test('Every comment belongs to the requested post', function () {",
+                  "    const json = pm.response.json();",
+                  "    json.comments.forEach(function (comment) {",
+                  "        pm.expect(String(comment.postId)).to.eql(String(json.postId));",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts/{{postId}}/comments",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "{{postId}}", "comments"]
+            },
+            "description": "Returns every comment that belongs to the post. Returns 404 when the post does not exist."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Create Comment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 201 Created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Comment was created with a generated id', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.comment.id).to.be.a('number');",
+                  "    pm.expect(json.comment.body).to.eql('This comment was created from Postman.');",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "if (json.comment && json.comment.id) {",
+                  "    pm.collectionVariables.set('createdCommentId', String(json.comment.id));",
+                  "    console.log('Saved createdCommentId =', json.comment.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"author\": \"Postman Tester\",\n  \"body\": \"This comment was created from Postman.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts/{{postId}}/comments",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "{{postId}}", "comments"]
+            },
+            "description": "Creates a comment for the post. body is required, author is optional (defaults to Anonymous). Returns 404 when the post does not exist and 400 for invalid input."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE Delete Comment",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('createdCommentId')) {",
+                  "    pm.collectionVariables.set('createdCommentId', '1');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Success response with the deleted comment', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.deletedComment).to.be.an('object');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/comments/{{createdCommentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["comments", "{{createdCommentId}}"]
+            },
+            "description": "Deletes a comment by its own id. Returns 404 when the comment does not exist."
+          },
+          "response": []
+        },
+        {
+          "name": "GET All Comments (unsupported - 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test('JSON error explains that a post id is required', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.message).to.include('Post id is required');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/comments",
+              "host": ["{{baseUrl}}"],
+              "path": ["comments"]
+            },
+            "description": "Comments are always scoped to a post, so this path is not supported and returns a JSON 404."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Error Cases",
+      "description": "Validation errors (400) and missing resources / unknown routes (404).",
+      "item": [
+        {
+          "name": "GET Post - Non-existing Id (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test('JSON error body', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.message).to.include('not found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts/99999",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "99999"]
+            },
+            "description": "GET a post id that does not exist."
+          },
+          "response": []
+        },
+        {
+          "name": "GET Post - Invalid Id Format (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test('No HTML error page is returned', function () {",
+                  "    pm.response.to.have.header('Content-Type');",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts/abc",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "abc"]
+            },
+            "description": "A non-numeric id can never match a post, so the API answers with JSON 404 instead of an HTML error page."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Create Post - Missing Title And Body (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Descriptive message', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.message).to.eql('Title and body are required.');",
+                  "    pm.expect(json.errors).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts"]
+            },
+            "description": "Empty JSON body: both required fields are rejected at once."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Create Post - Empty Title (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Message points at the title', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.message).to.include('title');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"\",\n  \"body\": \"Body is present but the title is empty.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts"]
+            },
+            "description": "An empty string title is treated as missing."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Create Post - Empty Body (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Message points at the body', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.message).to.include('body');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Title is present\",\n  \"body\": \"   \"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts"]
+            },
+            "description": "Whitespace-only content is rejected as well."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Create Post - Missing Body (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Message names the missing field', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.message).to.include('body is required');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Only a title was sent\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts"]
+            },
+            "description": "The required body field is absent."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Create Post - Invalid Data Type (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Non-string title is rejected', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.message).to.include('title');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": 12345,\n  \"body\": \"Numbers are not valid titles.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts"]
+            },
+            "description": "Validation also checks the data type, not only presence."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Create Post - Malformed JSON (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('JSON error instead of an HTML stack trace', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.message).to.include('Invalid JSON');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Broken JSON\",,\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts"]
+            },
+            "description": "The JSON body parser error is handled centrally and converted into a clean 400 response."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT Update Post - Validation Error (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Validation message returned', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.message).to.include('required');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts/{{postId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "{{postId}}"]
+            },
+            "description": "PUT uses the same validation middleware as POST."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT Update Post - Non-existing Id (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test('JSON 404 body', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.message).to.include('not found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Ghost post\",\n  \"body\": \"This post does not exist.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts/99999",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "99999"]
+            },
+            "description": "Valid body but the target post is missing."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE Post - Non-existing Id (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test('JSON 404 body', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.message).to.include('not found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts/99999",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "99999"]
+            },
+            "description": "Deleting something that does not exist returns 404."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Create Comment - Empty Body (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Comment validation message returned', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.message).to.include('Comment body is required');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"author\": \"Postman Tester\",\n  \"body\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts/{{postId}}/comments",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "{{postId}}", "comments"]
+            },
+            "description": "The required comment body must not be empty."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Create Comment - Post Not Found (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test('Post existence is checked before creating the comment', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.message).to.include('not found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"A comment for a post that does not exist.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/posts/99999/comments",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "99999", "comments"]
+            },
+            "description": "Comments cannot be created for a missing post."
+          },
+          "response": []
+        },
+        {
+          "name": "GET Comments - Post Not Found (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test('JSON 404 body', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts/99999/comments",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "99999", "comments"]
+            },
+            "description": "Reading the comments of a missing post returns 404."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE Comment - Non-existing Id (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test('Message names the comment id', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.message).to.include('Comment with id');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/comments/99999",
+              "host": ["{{baseUrl}}"],
+              "path": ["comments", "99999"]
+            },
+            "description": "Deleting an unknown comment returns 404."
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown Route (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test('Returns JSON, not HTML', function () {",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.message).to.eql('Route not found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/this-route-does-not-exist",
+              "host": ["{{baseUrl}}"],
+              "path": ["this-route-does-not-exist"]
+            },
+            "description": "The catch-all 404 handler for unknown routes."
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown Route Under /api (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test('JSON error body', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.message).to.eql('Route not found');",
+                  "    pm.expect(json.path).to.eql('/api/unknown-path');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/unknown-path",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "unknown-path"]
+            },
+            "description": "Same 404 handler also applies to the /api prefix."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000",
+      "type": "string"
+    },
+    {
+      "key": "postId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "createdPostId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "createdCommentId",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
