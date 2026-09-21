@@ -1,17 +1,31 @@
 /**
  * controllers/commentController.js — request handlers for comments.
  *
+ * MIGRATED TO MONGODB: comments are now documents in the "comments"
+ * collection instead of rows in an in-memory array.
+ *
  * Routes this controller answers:
  *   GET    /posts/:postId/comments   → getCommentsByPost
  *   POST   /posts/:postId/comments   → createComment
  *   DELETE /comments/:id             → deleteComment
  *
- * (The :postId parameter comes from the parent route, which is why the
- * comment router is created with { mergeParams: true }.)
+ * (:postId comes from the parent route, which is why the comment router is
+ * created with { mergeParams: true }.)
  */
 
-const commentModel = require('../models/commentModel');
-const postModel = require('../models/postModel');
+const Post = require('../models/Post');
+const Comment = require('../models/Comment');
+
+/**
+ * The blog API uses numeric ids, so "abc" can never be a valid id.
+ *
+ * @param {unknown} value
+ * @returns {number|null}
+ */
+function parseNumericId(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
+}
 
 /**
  * Builds the 404 response used when the parent post is missing.
@@ -34,14 +48,15 @@ function sendPostNotFound(res, postId) {
  * GET /posts/:postId/comments
  * 404 when the parent post does not exist.
  */
-function getCommentsByPost(req, res) {
-  const post = postModel.findById(req.params.postId);
+async function getCommentsByPost(req, res) {
+  const postId = parseNumericId(req.params.postId);
+  const post = postId === null ? null : await Post.findOne({ id: postId });
 
   if (!post) {
     return sendPostNotFound(res, req.params.postId);
   }
 
-  const comments = commentModel.findByPostId(req.params.postId);
+  const comments = await Comment.find({ postId: post.id }).sort({ id: 1 });
 
   return res.status(200).json({
     success: true,
@@ -56,17 +71,21 @@ function getCommentsByPost(req, res) {
  * Body is already validated (comment body) by middleware/validation.js.
  * 404 when the parent post does not exist, 201 when the comment is created.
  */
-function createComment(req, res) {
-  const post = postModel.findById(req.params.postId);
+async function createComment(req, res) {
+  const postId = parseNumericId(req.params.postId);
+  const post = postId === null ? null : await Post.findOne({ id: postId });
 
   if (!post) {
     return sendPostNotFound(res, req.params.postId);
   }
 
-  const comment = commentModel.create({
+  const id = await Comment.nextId();
+
+  const comment = await Comment.create({
+    id,
     postId: post.id,
     body: req.body.body,
-    author: req.body.author,
+    author: req.body.author, // undefined → schema default "Anonymous"
   });
 
   return res.status(201).json({
@@ -80,8 +99,9 @@ function createComment(req, res) {
  * DELETE /comments/:id
  * 404 when the comment does not exist.
  */
-function deleteComment(req, res) {
-  const comment = commentModel.remove(req.params.id);
+async function deleteComment(req, res) {
+  const commentId = parseNumericId(req.params.id);
+  const comment = commentId === null ? null : await Comment.findOne({ id: commentId });
 
   if (!comment) {
     return res.status(404).json({
@@ -89,6 +109,8 @@ function deleteComment(req, res) {
       message: `Comment with id ${req.params.id} not found.`,
     });
   }
+
+  await comment.deleteOne();
 
   return res.status(200).json({
     success: true,

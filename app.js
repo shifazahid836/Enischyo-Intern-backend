@@ -1,8 +1,8 @@
 /**
- * src/app.js — Express application configuration.
+ * app.js — Express application configuration.
  *
  * Middleware order matters:
- *   1. CORS + body parsers      → prepare the request
+ *   1. CORS + body parsers       → prepare the request
  *   2. Loggers (morgan + custom) → log the request
  *   3. Routes                    → handle the request
  *   4. notFound (404)            → nothing matched
@@ -10,6 +10,10 @@
  *
  * The actual HTTP listening happens in server.js, which keeps this file
  * testable and reusable.
+ *
+ * Every resource below is stored in MongoDB, so all routes are protected by
+ * `requireDatabase` (immediate 503 instead of a long timeout when the database
+ * is unreachable). Only /health stays available without a database.
  */
 
 // Loaded here as well so app.js can be required on its own (tests, scripts).
@@ -20,8 +24,14 @@ const express = require('express');
 const cors = require('./middleware/cors');
 const { morganLogger, requestLogger } = require('./middleware/logger');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
-const postRoutes = require('./routes/postRoutes');
-const commentRoutes = require('./routes/commentRoutes');
+const requireDatabase = require('./middleware/requireDatabase');
+const { getConnectionState } = require('./config/db');
+
+const postRoutes = require('./routes/posts');
+const commentRoutes = require('./routes/comments');
+const companyRoutes = require('./routes/companies');
+const jobRoutes = require('./routes/jobs');
+const applicationRoutes = require('./routes/applications');
 
 const app = express();
 
@@ -30,8 +40,8 @@ app.disable('x-powered-by');
 
 // --- Global middleware -------------------------------------------------------
 app.use(cors);
-app.use(morganLogger); // morgan: "GET /posts 200 - 12.4 ms"
-app.use(requestLogger); // custom: "GET /posts - 12.4ms"
+app.use(morganLogger); // morgan: "GET /jobs 200 - 12.4 ms"
+app.use(requestLogger); // custom: "GET /jobs - 12.4ms"
 app.use(express.json()); // parse application/json bodies
 app.use(express.urlencoded({ extended: true })); // parse form bodies
 
@@ -40,7 +50,9 @@ const healthCheck = (req, res) => {
   res.status(200).json({
     success: true,
     message: 'Blog API is running',
+    service: 'Job Board API (MongoDB + Mongoose)',
     environment: process.env.NODE_ENV || 'development',
+    database: getConnectionState(), // connected | connecting | disconnected
     timestamp: new Date().toISOString(),
   });
 };
@@ -51,15 +63,17 @@ app.get('/api/health', healthCheck);
 // --- API routes --------------------------------------------------------------
 /**
  * Routes are mounted under both "/" and "/api" so that:
- *   • the plain paths from the task spec work:  GET /posts
- *   • the namespaced paths work too:            GET /api/posts
+ *   • the plain paths from the task spec work:  GET /jobs
+ *   • the namespaced paths work too:            GET /api/jobs
  *
- * The second form is what the Vite frontend proxy expects, so the Task 1
- * frontend can talk to this API without extra configuration.
+ * The second form is what a Vite frontend proxy usually expects.
  */
 function mountApiRoutes(basePath) {
-  app.use(`${basePath}/posts`, postRoutes); // posts + nested comments
-  app.use(`${basePath}/comments`, commentRoutes); // DELETE /comments/:id
+  app.use(`${basePath}/jobs`, requireDatabase, jobRoutes);
+  app.use(`${basePath}/companies`, requireDatabase, companyRoutes);
+  app.use(`${basePath}/applications`, requireDatabase, applicationRoutes);
+  app.use(`${basePath}/posts`, requireDatabase, postRoutes); // blog + nested comments
+  app.use(`${basePath}/comments`, requireDatabase, commentRoutes); // DELETE /comments/:id
 }
 
 mountApiRoutes('');

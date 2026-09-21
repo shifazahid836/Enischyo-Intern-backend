@@ -1,13 +1,14 @@
-# Blog API — Backend (Task 2)
+# Job Board API — Express + MongoDB Atlas + Mongoose
 
-A fully working **REST API for the blog platform**, built with **Node.js + Express.js**.
-It implements complete CRUD for **posts** and **comments**, request validation,
-centralised error handling, request logging with response times and pagination.
+A REST API for a job board, built with **Node.js**, **Express.js**, **MongoDB Atlas** and
+**Mongoose**. It provides complete CRUD for **companies**, **jobs** and **applications**,
+a dynamic job search endpoint, schema-level validation, centralised error handling and a
+seed script that fills the database with realistic sample data.
 
-> 📦 **Data is stored in memory** (plain JavaScript arrays in `data/`).
-> MongoDB is **not** part of this task — the model layer is written so it can be
-> swapped for Mongoose later without touching routes or controllers
-> (see [Swapping in MongoDB](#-swapping-in-mongodb-later)).
+> 🗄️ **All data lives in MongoDB Atlas.** The in-memory JavaScript arrays that used to sit in
+> `data/` are gone: `models/` are Mongoose models and `config/db.js` is the only place that
+> knows the connection string. The original blog endpoints (`/posts`, `/comments`) are still
+> available and now also use MongoDB.
 
 ---
 
@@ -15,12 +16,12 @@ centralised error handling, request logging with response times and pagination.
 
 | Item | Value |
 | --- | --- |
-| Task | Task 2 — Backend API development |
-| Purpose | Provide the REST API that the blog frontend will consume |
-| Storage | In-memory JavaScript arrays (temporary, no database yet) |
-| Page size | 10 posts per page |
 | Base URL | `http://localhost:5000` |
-| Available at | `http://localhost:5000/posts` **and** `http://localhost:5000/api/posts` |
+| Available at | `http://localhost:5000/jobs` **and** `http://localhost:5000/api/jobs` |
+| Database | MongoDB Atlas (free tier) via Mongoose |
+| Seed data | 5 companies, 15 jobs, 3 applications, 12 posts, 6 comments |
+| Job types | `full-time`, `part-time`, `remote` |
+| Application statuses | `pending`, `reviewed`, `accepted`, `rejected` |
 
 ---
 
@@ -30,469 +31,560 @@ centralised error handling, request logging with response times and pagination.
 | --- | --- |
 | **Node.js** | JavaScript runtime for the server |
 | **Express.js** | Routing and middleware framework for the API |
-| **dotenv** | Loads configuration (like `PORT`) from a `.env` file |
+| **MongoDB Atlas** | Cloud-hosted MongoDB database |
+| **Mongoose** | Schemas, validation, references (`populate`) and queries |
+| **dotenv** | Loads `MONGODB_URI` and `PORT` from `.env` (never hard-coded) |
 | **morgan** | HTTP request logging (method, URL, status, response time) |
 | **nodemon** | Development tool that restarts the server on file changes |
-| **Postman** | Manual testing of every endpoint (collection included) |
+| **Postman** | Manual testing of every endpoint |
 
 ---
 
-## 📁 Project folder structure
+## 📁 Project structure
 
 ```
 backend/
-├── data/                              # temporary "database" (plain arrays)
-│   ├── posts.js                       #   12 sample posts
-│   └── comments.js                    #   6 sample comments
-├── src/
-│   ├── controllers/                   # business logic per resource
-│   │   ├── postController.js
-│   │   └── commentController.js
-│   ├── middleware/                    # reusable request pipeline pieces
-│   │   ├── logger.js                  #   morgan + custom response-time logger
-│   │   ├── validation.js              #   validates post/comment bodies
-│   │   ├── errorHandler.js            #   404 handler + 500 error handler
-│   │   └── cors.js                    #   allows the frontend dev server to call the API
-│   ├── models/                        # data-access layer (MongoDB swap point)
-│   │   ├── postModel.js
-│   │   └── commentModel.js
-│   ├── routes/                        # URL definitions, no business logic
-│   │   ├── postRoutes.js
-│   │   └── commentRoutes.js
-│   └── app.js                         # express app: middleware + route mounting
-├── postman/
-│   └── Blog-API.postman_collection.json   # 30 ready-to-run requests
-├── .env                               # local config (git-ignored)
-├── .env.example                       # template committed to git
-├── .gitignore
-├── package.json
-├── package-lock.json
-├── server.js                          # entry point (loads .env, starts the server)
-└── README.md
+├── config/
+│   └── db.js                     # connectDB / disconnectDB (the only Mongo entry point)
+├── models/
+│   ├── Company.js                # name, logo, website, description, industry, foundedYear
+│   ├── Job.js                    # title, description, requirements[], salaryMin/Max, type,
+│   │                             #   location, company (ObjectId ref), postedDate, deadline
+│   ├── Application.js            # job (ObjectId ref), applicantName, email, phone,
+│   │                             #   coverLetter, resumeURL, status, appliedAt
+│   ├── Post.js                   # blog posts (kept for the original API, numeric ids)
+│   └── Comment.js                # blog comments (kept for the original API, numeric ids)
+├── controllers/
+│   ├── jobController.js          # list / read / create / update / delete + search filters
+│   ├── companyController.js      # CRUD (+ cascade delete of its jobs)
+│   ├── applicationController.js  # CRUD (+ verifies the job exists, populates it)
+│   ├── postController.js         # blog posts (MongoDB backed)
+│   └── commentController.js      # blog comments (MongoDB backed)
+├── routes/
+│   ├── jobs.js                   # /jobs
+│   ├── companies.js              # /companies
+│   ├── applications.js           # /applications
+│   ├── posts.js                  # /posts (+ nested /posts/:postId/comments)
+│   └── comments.js               # /comments/:id
+├── middleware/
+│   ├── cors.js                   # allows the frontend dev server to call the API
+│   ├── logger.js                 # morgan + custom response-time logger
+│   ├── validation.js             # post/comment body validation
+│   ├── errorHandler.js           # 404 handler + central 400/409/500/503 translation
+│   └── requireDatabase.js        # replies 503 instead of hanging when Atlas is down
+├── utils/
+│   ├── validation.js             # email / phone / URL / ObjectId helpers (shared)
+│   ├── httpError.js              # errors that carry an HTTP status code
+│   └── asyncHandler.js           # forwards async errors to the error handler
+├── app.js                        # express app: middleware + route mounting
+├── server.js                     # entry point: connect to MongoDB, then listen
+├── seed.js                       # `npm run seed` → fills the database
+├── tests/
+│   ├── validation-smoke.js       # `npm run test:validation` (no database needed)
+│   └── api-smoke.js              # `npm run test:api` (real HTTP + MongoDB)
+├── .env                          # MONGODB_URI + PORT (git-ignored, never committed)
+├── .env.example                  # template with placeholders only
+├── .gitignore                    # keeps .env and node_modules out of Git
+└── package.json
 ```
 
-**Why this structure?** `server.js` only starts the process, `app.js` configures
-Express, routes only map URLs to controllers, controllers hold the logic and
-models own the data. Nothing but wiring lives in the entry file.
+**Why this structure?** `server.js` only starts the process, `app.js` configures Express,
+`routes/` maps URLs to controllers, `controllers/` holds the logic, `models/` own the data
+and `config/db.js` owns the connection. Nothing else touches MongoDB.
 
 ---
 
-## ⚙️ Environment variables
-
-`.env` (already present locally, **never committed**):
-
-```env
-PORT=5000
-NODE_ENV=development
-CORS_ORIGIN=*
-```
-
-| Variable | Description | Default |
-| --- | --- | --- |
-| `PORT` | Port the API listens on | `5000` |
-| `NODE_ENV` | `development` or `production` (production hides internal error details) | `development` |
-| `CORS_ORIGIN` | Allowed browser origin(s) | `*` |
-
-`.env.example` is committed so anyone cloning the repository knows what to set.
-The port is **never hard-coded** — it always comes from the environment.
-
----
-
-## 🚀 Installation & running the server
+## 🚀 Quick start (5 commands)
 
 ```bash
-# 1. go to the backend folder
 cd backend
-
-# 2. install dependencies
-npm install
-
-# 3. create your .env file
-cp .env.example .env        # macOS / Linux
-copy .env.example .env      # Windows (PowerShell / CMD)
-
-# 4. start the server
-npm run dev                 # nodemon (auto-restart, recommended while developing)
-npm start                   # plain node
+npm install                 # 1. install dependencies (express, mongoose, dotenv, morgan)
+copy .env.example .env      # 2. create your env file (Windows: copy  |  macOS/Linux: cp)
+#   3. open .env and paste your own MONGODB_URI (see the next section)
+npm run seed                # 4. fill the database with sample data
+npm run dev                 # 5. start the server with nodemon
 ```
 
-Expected console output:
+Then open <http://localhost:5000/jobs> — you should see the 15 seeded jobs.
+
+---
+
+## ☁️ MongoDB Atlas setup (step by step)
+
+1. **Create an account** — go to <https://www.mongodb.com/cloud/atlas/register> and sign up
+   (the free tier needs no credit card).
+2. **Create a free cluster** — *Build a Database* → choose **M0 / Free** → pick the provider
+   and the region closest to you → *Create*.
+3. **Create a database user** — left menu *Database Access* → *Add New Database User*:
+   - Authentication: **Password**
+   - Username: for example `jobboard_user`
+   - Password: click *Autogenerate Secure Password* and **save it somewhere safe**
+     (you will paste it into `.env` in step 7 — you will not be able to see it again)
+   - Database User Privileges: **Read and write to any database** → *Add User*
+4. **Allow network access** — left menu *Network Access* → *Add IP Address*:
+   - Click **Allow Access from Anywhere** → this fills in `0.0.0.0/0`
+   - *Confirm*. (Fine for development; for production restrict it to your server's IP.)
+5. **Wait for the cluster** to finish provisioning (green status), then *Connect* →
+   **Drivers** → **Node.js**.
+6. **Copy the connection string.** It looks like this (placeholders shown in `< >`):
+
+   ```
+   mongodb+srv://<db_username>:<db_password>@<cluster_name>.xxxxx.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
+   ```
+
+7. **Create the `.env` file** in the `backend/` folder:
+
+   ```bash
+   copy .env.example .env      # Windows
+   cp .env.example .env        # macOS / Linux
+   ```
+
+8. **Paste the connection string** into it, replacing the placeholders and adding a database
+   name (`jobboard`) before the `?`:
+
+   ```ini
+   MONGODB_URI=mongodb+srv://jobboard_user:YOUR_PASSWORD@cluster0.abcde.mongodb.net/jobboard?retryWrites=true&w=majority&appName=Cluster0
+   ```
+
+   Tips:
+   - Replace `<db_password>` with the password from step 3.
+   - Add `/jobboard` before the `?` so the app uses a database called `jobboard`
+     (MongoDB creates it automatically on the first insert).
+   - If your password contains `@`, `/` or `#`, URL-encode it
+     (`@` → `%40`, `/` → `%2F`, `#` → `%23`).
+   - **Never** commit this value. `.env` is already listed in `.gitignore`.
+
+9. **Seed the database**:
+
+   ```bash
+   npm run seed
+   ```
+
+10. **Start the server**:
+
+    ```bash
+    npm run dev      # nodemon (auto-restart) — or: npm start
+    ```
+
+---
+
+## 🌱 Seeding the database (`npm run seed`)
+
+`seed.js` connects to Atlas, **clears** the Company, Job, Application, Post and Comment
+collections, inserts fresh sample data and closes the connection.
+
+Expected output:
 
 ```
+⏳ Connecting to MongoDB...
+✅ MongoDB connected (database: jobboard)
+🧹 Clearing existing collections...
+   removed → companies: 5, jobs: 15, applications: 3, posts: 12, comments: 6
+🏢 Created 5 companies.
+💼 Created 15 jobs.
+📨 Created 3 applications.
+📝 Created 12 posts and 6 comments.
+
+✅ Seed complete
+   Companies:    5
+   Jobs:         15
+   Applications: 3
+   Posts:        12
+   Comments:     6
+🔌 MongoDB connection closed.
+```
+
+The seed script is your proof that the required data exists:
+
+- **5 companies** — TechCorp, ByteBridge, CodeLabs, InnovateSoft, PixelWorks
+- **15 jobs** — each one stores the real `ObjectId` of one of those companies
+  (that is what makes `populate('company')` work on `GET /jobs`)
+- **3 applications** — each one referencing one of the seeded jobs
+
+Every document passes the same Mongoose validation the API uses, so the seed data can never
+be "less valid" than data sent over HTTP.
+
+> ⚠️ `npm run seed` **deletes** the existing records in those five collections. Run it on a
+> development/demo database, not on production data.
+
+---
+
+## ▶️ Running the server
+
+```bash
+npm run dev     # nodemon, restarts on every file change
+npm start       # plain node
+```
+
+Expected output:
+
+```
+✅ MongoDB connected (database: jobboard)
 ------------------------------------------------------------
-🚀  Blog API is running
-    Mode:        development
-    Base URL:    http://localhost:5000
-    Posts:       http://localhost:5000/posts
-    Health:      http://localhost:5000/api/health
-    Stop server: Ctrl + C
+🚀  Job Board API is running
+    Mode:         development
+    Base URL:     http://localhost:5000
+    Jobs:         http://localhost:5000/jobs
+    Companies:    http://localhost:5000/companies
+    Applications: http://localhost:5000/applications
+    Health:       http://localhost:5000/health
+    Stop server:  Ctrl + C
 ------------------------------------------------------------
 ```
 
-Quick check in a browser or Postman: `GET http://localhost:5000/api/health`
+The server connects to MongoDB **before** it starts listening, so database-dependent
+requests are never served while the connection is still being established. `Ctrl + C`
+closes both the HTTP server and the database connection.
 
-### npm scripts
+If the connection fails you get a checklist instead of a stack trace:
 
-| Script | Command | Purpose |
-| --- | --- | --- |
-| `npm start` | `node server.js` | Run the server |
-| `npm run dev` | `nodemon server.js` | Run and auto-restart on changes |
+```
+❌ Could not connect to MongoDB.
+   Reason: ...
+   How to fix it:
+     1. Create backend/.env (copy .env.example) and set MONGODB_URI ...
+     2. In Atlas → Network Access, allow your IP (0.0.0.0/0 for development).
+     3. Make sure the database user password in the URI is correct.
+```
 
 ---
 
 ## 🔌 API endpoints
 
-Routes are mounted **twice** — without and with the `/api` prefix (e.g. `/posts`
-and `/api/posts`) — so the frontend proxy can use `/api` while the plain paths
-also work.
+Every route is available both at the root (`/jobs`) and under `/api` (`/api/jobs`).
 
-### Posts
-
-| Method | Endpoint | Description | Success |
-| --- | --- | --- | --- |
-| `GET` | `/posts` | All posts, paginated (10 per page) | `200` |
-| `GET` | `/posts?page=2` | A specific page | `200` |
-| `GET` | `/posts/:id` | One post by id | `200` / `404` |
-| `POST` | `/posts` | Create a post | `201` / `400` |
-| `PUT` | `/posts/:id` | Update a post | `200` / `400` / `404` |
-| `DELETE` | `/posts/:id` | Delete a post (and its comments) | `200` / `404` |
-
-### Comments
-
-| Method | Endpoint | Description | Success |
-| --- | --- | --- | --- |
-| `GET` | `/posts/:id/comments` | All comments of a post | `200` / `404` |
-| `POST` | `/posts/:id/comments` | Add a comment to a post | `201` / `400` / `404` |
-| `DELETE` | `/comments/:id` | Delete a comment by id | `200` / `404` |
-
-### Health
+### Jobs
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `GET` | `/health` or `/api/health` | Server status, environment and timestamp |
+| `GET` | `/jobs` | All jobs, newest first, company populated. Supports the search filters below |
+| `GET` | `/jobs?keyword=react&location=remote&type=full-time` | Dynamic search (see below) |
+| `GET` | `/jobs/:id` | One job (company populated) · `404` when it does not exist |
+| `POST` | `/jobs` | Create a job (validates the body + verifies the company exists) |
+| `PUT` | `/jobs/:id` | Update a job (re-validates the merged document) |
+| `DELETE` | `/jobs/:id` | Delete a job (also deletes its applications) |
 
-### Status codes used
+### Search: `GET /jobs`
 
-| Code | Meaning | When |
+All three filters are optional and combine with AND:
+
+| Parameter | Matching | Example |
 | --- | --- | --- |
-| `200` | OK | Successful `GET`, `PUT`, `DELETE` |
-| `201` | Created | Successful `POST` |
-| `400` | Bad Request | Validation failed (missing/empty fields, malformed JSON) |
-| `404` | Not Found | Missing post/comment, or unknown route |
-| `500` | Internal Server Error | Unexpected failure (internal details hidden in production) |
+| `keyword` | case-insensitive, partial, in **title or description** | `?keyword=react` |
+| `location` | case-insensitive, partial | `?location=remote` → "Remote (Asia)", "Remote (Worldwide)" |
+| `type` | exact, one of `full-time` / `part-time` / `remote` | `?type=full-time` |
 
----
-
-## 📥 Example requests & responses
-
-### 1. List posts with pagination
+Two extra filters are supported for convenience: `?company=<ObjectId>` and
+`?isActive=true|false`.
 
 ```http
-GET /posts?page=1
+GET /jobs?keyword=react
+GET /jobs?location=remote
+GET /jobs?type=full-time
+GET /jobs?keyword=react&location=remote&type=full-time
 ```
+
+The response always echoes the filters that were applied and always populates the company:
 
 ```json
 {
   "success": true,
-  "currentPage": 1,
-  "totalPosts": 12,
-  "totalPages": 2,
-  "postsPerPage": 10,
-  "count": 10,
-  "hasNextPage": true,
-  "hasPrevPage": false,
-  "posts": [
+  "count": 2,
+  "filters": { "keyword": "react", "location": "remote", "type": "full-time" },
+  "jobs": [
     {
-      "id": 1,
-      "title": "Getting Started with Node.js",
-      "body": "Node.js lets you run JavaScript outside the browser...",
-      "author": "Aarav Sharma",
-      "createdAt": "2026-01-05T09:00:00.000Z",
-      "updatedAt": "2026-01-05T09:00:00.000Z"
+      "_id": "68c1f0a4e2b1c4d5e6f7a8b9",
+      "title": "React Frontend Developer",
+      "type": "full-time",
+      "location": "Remote (Worldwide)",
+      "salaryMin": 60000,
+      "salaryMax": 80000,
+      "requirements": ["3+ years of experience with React", "..."],
+      "company": {
+        "_id": "68c1f0a4e2b1c4d5e6f7a8b0",
+        "name": "TechCorp",
+        "website": "https://techcorp.example.com",
+        "industry": "Software Development",
+        "foundedYear": 2012
+      },
+      "postedDate": "2026-09-17T09:12:44.031Z",
+      "deadline": "2026-10-30T09:12:44.031Z",
+      "isActive": true
     }
   ]
 }
 ```
 
-* Page size is fixed at **10**. `?page=` may be omitted (defaults to page 1).
-* An invalid value such as `?page=abc` or `?page=0` falls back to page 1.
-* A page beyond the last one returns an empty `posts` array (`200`, no error).
+### Companies
 
-### 2. Get one post — `GET /posts/1`
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/companies` | All companies (alphabetical) |
+| `GET` | `/companies/:id` | One company + `jobCount` |
+| `POST` | `/companies` | Create a company (duplicate name → `409`) |
+| `PUT` | `/companies/:id` | Update a company |
+| `DELETE` | `/companies/:id` | Delete a company **and** its jobs and their applications |
 
-```json
-{ "success": true, "post": { "id": 1, "title": "Getting Started with Node.js", "body": "...", "author": "Aarav Sharma" } }
+### Applications
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/applications` | All applications, job + company populated. Filters: `?job=<id>`, `?status=pending` |
+| `GET` | `/applications/:id` | One application |
+| `POST` | `/applications` | Create an application (verifies the job exists, status defaults to `pending`) |
+| `PUT` | `/applications/:id` | Update an application (typically the `status`) |
+| `DELETE` | `/applications/:id` | Delete an application |
+
+### Blog (original API, now MongoDB backed)
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/posts` | Paginated posts (10 per page) |
+| `POST` | `/posts` | Create a post |
+| `GET` / `PUT` / `DELETE` | `/posts/:id` | Read / update / delete a post |
+| `GET` / `POST` | `/posts/:postId/comments` | Comments of a post |
+| `DELETE` | `/comments/:id` | Delete a comment |
+
+### Health
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/health` | Server status + **database state** (works even when Atlas is down) |
+
+---
+
+## 🧪 Example requests
+
+PowerShell (Windows). `curl.exe` is used so the JSON is easy to read; you can also use
+[Postman](https://www.postman.com/) with the same URLs.
+
+```powershell
+# Health + database state
+curl.exe -s http://localhost:5000/health
+
+# All jobs (company is embedded in every job)
+curl.exe -s http://localhost:5000/jobs
+
+# Search: keyword / location / type — individually and together
+curl.exe -s "http://localhost:5000/jobs?keyword=react"
+curl.exe -s "http://localhost:5000/jobs?location=remote"
+curl.exe -s "http://localhost:5000/jobs?type=full-time"
+curl.exe -s "http://localhost:5000/jobs?keyword=react&location=remote&type=full-time"
+
+# One job (404 for an unknown id, 400 for a malformed id)
+curl.exe -s http://localhost:5000/jobs/<JOB_ID>
+curl.exe -s http://localhost:5000/jobs/not-an-id
+
+# Companies
+curl.exe -s http://localhost:5000/companies
+
+# Create a company
+curl.exe -s -X POST http://localhost:5000/companies -H "Content-Type: application/json" -d "{\"name\":\"Acme Devices\",\"logo\":\"https://logo.example.com/acme.png\",\"website\":\"https://acme.example.com\",\"description\":\"Acme Devices builds connected hardware for smart homes.\",\"industry\":\"Internet of Things\",\"foundedYear\":2019}"
+
+# Create a job (company must be the ObjectId of an existing company)
+curl.exe -s -X POST http://localhost:5000/jobs -H "Content-Type: application/json" -d "{\"title\":\"Backend Developer (Node.js)\",\"description\":\"Build and maintain REST APIs with Express and MongoDB for our platform.\",\"requirements\":[\"2+ years with Node.js\",\"Experience with MongoDB\"],\"salaryMin\":55000,\"salaryMax\":75000,\"type\":\"full-time\",\"location\":\"Karachi, Pakistan\",\"company\":\"<COMPANY_ID>\",\"deadline\":\"2026-12-31\",\"isActive\":true}"
+
+# Update / delete a job
+curl.exe -s -X PUT http://localhost:5000/jobs/<JOB_ID> -H "Content-Type: application/json" -d "{\"salaryMax\":90000,\"isActive\":false}"
+curl.exe -s -X DELETE http://localhost:5000/jobs/<JOB_ID>
+
+# Applications
+curl.exe -s http://localhost:5000/applications
+curl.exe -s -X POST http://localhost:5000/applications -H "Content-Type: application/json" -d "{\"job\":\"<JOB_ID>\",\"applicantName\":\"Ayesha Khan\",\"email\":\"ayesha.khan@example.com\",\"phone\":\"+92 300 1234567\",\"coverLetter\":\"I have four years of React experience and would love to join your team.\",\"resumeURL\":\"https://drive.example.com/resumes/ayesha-khan.pdf\"}"
+
+# Move an application to another status
+curl.exe -s -X PUT http://localhost:5000/applications/<APPLICATION_ID> -H "Content-Type: application/json" -d "{\"status\":\"reviewed\"}"
 ```
 
-Missing post → `404`:
+> Replace `<JOB_ID>`, `<COMPANY_ID>` and `<APPLICATION_ID>` with ids returned by the API.
 
-```json
-{ "success": false, "message": "Post with id 999 not found." }
-```
-
-### 3. Create a post — `POST /posts`
-
-```json
-{
-  "title": "My First Post",
-  "body": "This is my first blog post.",
-  "author": "Optional Author"
-}
-```
-
-→ `201 Created`
+### Example: `POST /jobs` (successful)
 
 ```json
 {
   "success": true,
-  "message": "Post created successfully.",
-  "post": { "id": 13, "title": "My First Post", "body": "This is my first blog post.", "author": "Optional Author" }
+  "message": "Job created successfully.",
+  "job": {
+    "_id": "68c1f0a4e2b1c4d5e6f7a8c1",
+    "title": "Backend Developer (Node.js)",
+    "type": "full-time",
+    "location": "Karachi, Pakistan",
+    "salaryMin": 55000,
+    "salaryMax": 75000,
+    "company": { "_id": "68c1f0a4e2b1c4d5e6f7a8b0", "name": "TechCorp" },
+    "postedDate": "2026-09-20T10:15:02.114Z",
+    "isActive": true
+  }
 }
 ```
 
-### 4. Update a post — `PUT /posts/13`
+### Example: validation error (`400`)
 
-```json
-{ "title": "Updated title", "body": "Updated body." }
-```
-
-→ `200 OK` with `"message": "Post updated successfully."` and the updated post.
-
-### 5. Delete a post — `DELETE /posts/13`
+`POST /jobs` with `{"title": "x"}` returns one line per invalid field:
 
 ```json
 {
-  "success": true,
-  "message": "Post deleted successfully.",
-  "deletedPost": { "id": 13, "title": "Updated title" },
-  "deletedComments": 2
-}
-```
-
-### 6. Get comments of a post — `GET /posts/1/comments`
-
-```json
-{
-  "success": true,
-  "postId": 1,
-  "totalComments": 2,
-  "comments": [
-    { "id": 1, "postId": 1, "author": "Priya Nair", "body": "Great introduction!" }
+  "success": false,
+  "message": "Validation failed. Please check the highlighted fields.",
+  "errors": [
+    "Job title must be at least 3 characters long.",
+    "Job description is required.",
+    "At least one requirement is required.",
+    "Minimum salary is required.",
+    "Maximum salary is required.",
+    "Job type is required.",
+    "Location is required.",
+    "company is required (use the company ObjectId)."
   ]
 }
 ```
 
-### 7. Add a comment — `POST /posts/1/comments`
+---
 
-```json
-{ "author": "Optional Author", "body": "Great post!" }
+## 🧪 Automated tests
+
+Two dependency-free scripts are included (they only use Node's built-in `fetch`):
+
+| Command | What it checks | Needs a database? |
+| --- | --- | --- |
+| `npm run test:validation` | every Mongoose rule (required fields, enums, URL / e-mail / phone formats, salary range, deadline order) **and** every error-handler mapping (400 / 404 / 409 / 500 / 503) | ❌ no |
+| `npm run test:api` | every endpoint over real HTTP: the job search filters, CRUD for jobs / companies / applications, populated company references, validation errors, 404s and the blog endpoints | ✅ yes (Atlas) |
+
+`npm run test:validation` output (excerpt):
+
+```
+── models/Job.js ─────────────────────────────────────────────
+  ✓ accepts a valid job
+  ✓ rejects an empty requirements array
+  ✓ rejects salaryMax < salaryMin
+  ✓ rejects a deadline before postedDate
+── middleware/errorHandler.js ────────────────────────────────
+  ✓ Mongoose ValidationError → 400 with per-field errors
+  ✓ duplicate key (11000) → 409
+  ✓ MongooseServerSelectionError → 503
+═══════════════════════════════════════════════════════════
+RESULT: 47 passed, 0 failed
 ```
 
-→ `201 Created` with `"message": "Comment added successfully."`
+`npm run test:api` prints a `✓`/`✗` line per check, then real sample responses
+(`GET /jobs?keyword=react&location=remote&type=full-time`, `GET /jobs/:id`,
+an invalid `POST /jobs`, `GET /applications`) that you can copy into your report.
 
-### 8. Delete a comment — `DELETE /comments/1`
-
-→ `200 OK` with `"message": "Comment deleted successfully."`
+> ⚠️ `npm run test:api` runs `seed.js` first, which **clears** the Company, Job,
+> Application, Post and Comment collections before inserting the sample data.
+> Point it at the same development database you seed.
 
 ---
 
 ## ✅ Validation rules
 
-Validation lives in `src/middleware/validation.js` and runs **before** the controller.
+Validation lives in the Mongoose schemas, so it runs for **every** write (API, seed script,
+console) and cannot be bypassed.
 
-| Endpoint | Rule | Response |
+| Model | Field | Rules |
 | --- | --- | --- |
-| `POST /posts`, `PUT /posts/:id` | `title` must be a non-empty string | `400` |
-| `POST /posts`, `PUT /posts/:id` | `body` must be a non-empty string | `400` |
-| `POST /posts/:id/comments` | `body` must be a non-empty string | `400` |
-| any | malformed JSON payload | `400` |
+| **Company** | `name` | required, trimmed, 2–100 chars, **unique** (duplicate → `409`) |
+| | `logo` | optional, but must be a valid URL when provided |
+| | `website` | required, valid URL |
+| | `description` | required, 20–2000 chars |
+| | `industry` | required, 2–60 chars |
+| | `foundedYear` | required, whole number between 1800 and the current year |
+| **Job** | `title` | required, trimmed, 3–120 chars |
+| | `description` | required, 20–5000 chars |
+| | `requirements` | required, array with at least one non-empty string (trimmed, de-duplicated) |
+| | `salaryMin` | required, number ≥ 0 |
+| | `salaryMax` | required, number ≥ 0, **cannot be lower than `salaryMin`** |
+| | `type` | required, one of `full-time`, `part-time`, `remote` |
+| | `location` | required, 2–100 chars |
+| | `company` | required **ObjectId** referencing a Company that exists |
+| | `postedDate` | valid date, defaults to "now" |
+| | `deadline` | valid date, must be after `postedDate` |
+| | `isActive` | boolean, defaults to `true` |
+| **Application** | `job` | required **ObjectId** referencing a Job that exists |
+| | `applicantName` | required, trimmed, 2–80 chars |
+| | `email` | required, valid e-mail format (stored lowercase) |
+| | `phone` | required, digits/spaces/`+`/`-`/parentheses, 7–20 characters |
+| | `coverLetter` | required, 30–3000 chars |
+| | `resumeURL` | required, valid URL |
+| | `status` | one of `pending`, `reviewed`, `accepted`, `rejected` — defaults to `pending` |
+| | `appliedAt` | defaults to the current date/time |
 
-Whitespace-only values (e.g. `"   "`) are treated as empty.
+`createdAt` / `updatedAt` are added automatically (`timestamps: true`).
 
-Error format:
+---
+
+## 🚨 Error handling
+
+All errors use the same JSON shape, produced by `middleware/errorHandler.js`:
 
 ```json
-{
-  "success": false,
-  "message": "Title and body are required.",
-  "errors": [
-    "title is required and cannot be empty.",
-    "body is required and cannot be empty."
-  ]
-}
+{ "success": false, "message": "…", "errors": ["…"] }
 ```
 
-Single missing field:
-
-```json
-{ "success": false, "message": "body is required and cannot be empty.", "errors": ["body is required and cannot be empty."] }
-```
+| Situation | Status | Example message |
+| --- | --- | --- |
+| Invalid MongoDB ObjectId | `400` | `"abc" is not a valid job id. A job id is a 24-character ObjectId.` |
+| Invalid query parameter | `400` | `type must be one of: full-time, part-time, remote.` |
+| Schema validation failure | `400` | `Validation failed. Please check the highlighted fields.` (+ `errors`) |
+| Missing required fields | `400` | same as above, one entry per field |
+| Malformed JSON body | `400` | `Invalid JSON in request body. Please check the syntax.` |
+| Referenced company / job does not exist | `404` | `Company with id … does not exist. Create the company first.` |
+| Resource not found | `404` | `Job with id … not found.` |
+| Unknown route | `404` | `Route not found` |
+| Duplicate value (unique index) | `409` | `A record with this name already exists ("TechCorp").` |
+| Unexpected server error | `500` | `Internal Server Error` (details hidden in production) |
+| Database unreachable | `503` | `Database is not connected, so this request cannot be served right now.` |
 
 ---
 
-## 🪵 Request logging
+## 🔒 Environment & security
 
-`src/middleware/logger.js` provides two loggers that run on every request:
+- The connection string lives **only** in `backend/.env` — there is no hard-coded URI
+  anywhere in the source code (`config/db.js` reads `process.env.MONGODB_URI`).
+- `.env` is listed in both `.gitignore` files, so it is never committed.
+- `.env.example` contains **placeholders only** and is safe to commit.
+- If a credential ever leaks, rotate the password in Atlas → *Database Access* →
+  *Edit User* → *Edit Password*.
 
-1. **morgan** (required dependency) — detailed HTTP line with the status code:
-   `GET /posts 200 - 0.949 ms`
-2. **custom `requestLogger`** — the concise line from the task spec, measured with
-   the Node `finish` event:
+`.env` (git-ignored):
 
+```ini
+PORT=5000
+NODE_ENV=development
+CORS_ORIGIN=*
+MONGODB_URI=mongodb+srv://<db_username>:<db_password>@<cluster>.mongodb.net/jobboard?retryWrites=true&w=majority
 ```
-GET /posts - 1.9ms
-POST /posts - 8.4ms
-PUT /posts/13 - 1.2ms
-DELETE /comments/7 - 0.5ms
-```
 
-In production (`NODE_ENV=production`) morgan switches to the Apache-style
-`combined` format.
-
----
-
-## 🛡️ Error handling
-
-* **404 handler** (`notFound`) — catches every unmatched route and answers with
-  JSON instead of an HTML page:
-
-  ```json
-  { "success": false, "message": "Route not found", "method": "GET", "path": "/nope" }
-  ```
-
-* **500 handler** (`errorHandler`) — one place for every unexpected error:
-
-  ```json
-  { "success": false, "message": "Internal Server Error" }
-  ```
-
-  In non-production environments an extra `error` field with the real message is
-  added for debugging; in production it is omitted so internals are never leaked.
-
-* Both handlers are registered **last** in `src/app.js`, after all routes.
-
----
-
-## 🧪 Testing with Postman
-
-The collection `postman/Blog-API.postman_collection.json` contains **30 requests**
-with automated assertions.
-
-### Import the collection
-
-1. Open Postman → **Import** (top-left) → **Files** → select
-   `backend/postman/Blog-API.postman_collection.json`.
-2. The collection **Blog API - Node.js + Express (Task 2)** appears in the sidebar.
-3. Start the backend first: `npm run dev` inside `backend/`.
-4. Check the collection variables (`baseUrl` = `http://localhost:5000`, `postId` = `1`)
-   and change them if your server runs elsewhere.
-5. Send requests individually, or right-click the collection → **Run collection**
-   to execute everything (the *Posts* folder creates a post, updates it and then
-   deletes it, so the requests are self-contained).
-
-### Collection folders
-
-| Folder | Contents |
-| --- | --- |
-| **Health Check** | `GET /api/health` |
-| **Posts** | list (all / page 1 / page 2 / page 99), get by id, create, update, delete |
-| **Comments** | comments of a post, create comment, delete comment, unsupported `GET /comments` |
-| **Error Cases** | missing/empty/invalid **title** and **body**, invalid data types, malformed JSON, non-existing post & comment ids, unknown routes, unknown `/api` route |
-
-Requests that create data store the new id in the `createdPostId` /
-`createdCommentId` collection variables, which the follow-up `PUT` and `DELETE`
-requests reuse automatically.
-
-### Manual curl equivalent
+Before pushing to GitHub, confirm the file is ignored:
 
 ```bash
-curl http://localhost:5000/posts
-curl "http://localhost:5000/posts?page=2"
-curl http://localhost:5000/posts/1
-curl -X POST http://localhost:5000/posts -H "Content-Type: application/json" -d "{\"title\":\"Hello\",\"body\":\"World\"}"
-curl -X PUT http://localhost:5000/posts/1 -H "Content-Type: application/json" -d "{\"title\":\"Hi\",\"body\":\"Again\"}"
-curl -X DELETE http://localhost:5000/posts/13
-curl http://localhost:5000/posts/1/comments
-curl -X POST http://localhost:5000/posts/1/comments -H "Content-Type: application/json" -d "{\"body\":\"Nice!\"}"
-curl -X DELETE http://localhost:5000/comments/1
+git status --ignored          # .env should appear under "Ignored files"
+git ls-files | findstr .env   # should print nothing (Windows)
 ```
 
 ---
 
-## 🗄️ Data (temporary, in-memory)
+## 🧯 Troubleshooting
 
-Sample data lives in `data/posts.js` (12 posts, so pagination is easy to see) and
-`data/comments.js` (6 comments).
-
-```js
-// post
-{ id: 1, title: 'My First Post', body: 'This is my first blog post.', author: 'Aarav Sharma', createdAt: '...', updatedAt: '...' }
-
-// comment
-{ id: 1, postId: 1, author: 'Priya Nair', body: 'Great post!', createdAt: '...' }
-```
-
-Because the data is in memory, **restarting the server resets everything** to the
-seed values. New ids are generated by incrementing a counter inside the models.
-
----
-
-## 🔄 Swapping in MongoDB later
-
-Only `src/models/postModel.js` and `src/models/commentModel.js` need to change.
-Each function documents its Mongo equivalent, for example:
-
-| Current function | Mongo / Mongoose equivalent |
+| Problem | Cause & fix |
 | --- | --- |
-| `findById(id)` | `Post.findById(id)` |
-| `findPage(page, limit)` | `Post.find().skip((page - 1) * limit).limit(limit)` |
-| `create(data)` | `Post.create(data)` |
-| `update(id, changes)` | `Post.findByIdAndUpdate(id, changes, { new: true })` |
-| `remove(id)` | `Post.findByIdAndDelete(id)` |
-| `removeByPostId(postId)` | `Comment.deleteMany({ postId })` |
-
-Routes, controllers, validation and error handling stay exactly as they are.
-
----
-
-## 🐙 Pushing to GitHub
-
-Already GitHub-ready: `package.json`, `package-lock.json`, source code, Postman
-collection, `README.md`, `.env.example` and `.gitignore` are committed, while
-`node_modules/` and `.env` are **ignored**.
-
-```bash
-cd backend
-git add .
-git status     # node_modules and .env must NOT appear
-git commit -m "Task 2: Blog REST API with Express"
-git push
-```
+| `MONGODB_URI is missing or invalid` | `.env` is missing or the variable is empty. Copy `.env.example` → `.env` and paste your string. |
+| `MongooseServerSelectionError` / `Could not connect to MongoDB` | Atlas **Network Access** does not allow your IP. Add `0.0.0.0/0` (development) and wait ~1 minute. |
+| `Authentication failed` | Wrong username/password in the URI, or the password is not URL-encoded (`@` → `%40`). |
+| Every request returns `503` | The server started without a database connection. Fix `.env`, then restart. |
+| `EADDRINUSE: address already in use :::5000` | Another process uses port 5000: stop it or set `PORT=5001` in `.env`. |
+| `GET /jobs` is empty | Run `npm run seed`. |
+| Changes to `.env` have no effect | Restart the server — environment variables are read once at startup. |
 
 ---
 
-## 🆘 Troubleshooting
+## 🧭 Notes on the migration from in-memory data
 
-| Problem | Solution |
-| --- | --- |
-| `EADDRINUSE: address already in use :::5000` | Two servers cannot share one port. Press `Ctrl + C` in the other terminal that runs the API, or set another port in `.env`. On Windows, find and stop the process with `netstat -ano \| findstr :5000` then `taskkill /PID <pid> /F` |
-| `Cannot find module 'express'` | Run `npm install` inside `backend/` |
-| `nodemon is not recognized` | Use `npx nodemon server.js` or reinstall dev dependencies with `npm install` |
-| All Postman requests fail to connect | The server is not running, or `baseUrl` points to the wrong port |
-| Data "disappears" after a restart | Expected — the store is in memory; restarting reloads the seed data |
-
----
-
-## 👣 Possible next steps
-
-* Replace the arrays with MongoDB + Mongoose (Task 3 territory).
-* Add a `User` resource with authentication (JWT) and protect write endpoints.
-* Add automated tests (Jest + Supertest) and a CI workflow.
-* Add query filtering (`?search=`, `?author=`) and sorting to `GET /posts`.
-
----
-
-## 📄 License
-
-MIT — free to use for learning purposes.
-
+- `data/posts.js` and `data/comments.js` were **removed**. Their content now lives in
+  `seed.js` and is stored in MongoDB.
+- The blog API keeps **numeric ids** (`/posts/1`) even though MongoDB uses ObjectIds, so the
+  existing frontend and Postman collection keep working unchanged.
+- Job, company and application ids are real Mongo ObjectIds (`_id`), which is what allows
+  references and `populate()`.
+- Deleting a job removes its applications, and deleting a company removes its jobs and their
+  applications, so no orphaned documents are left behind.

@@ -1,7 +1,7 @@
 /**
- * routes/commentRoutes.js — URL definitions for the comment resource.
+ * routes/comments.js — URL definitions for the comment resource.
  *
- * The same router is mounted in two places by src/app.js:
+ * The same router is mounted in two places by app.js:
  *   1. /posts/:postId/comments  → GET all, POST create
  *   2. /comments                → DELETE /comments/:id
  *
@@ -19,14 +19,16 @@ const express = require('express');
 
 const commentController = require('../controllers/commentController');
 const { validateComment } = require('../middleware/validation');
+const asyncHandler = require('../utils/asyncHandler');
 
+// `mergeParams` keeps :postId available when mounted under /posts/:postId
 const router = express.Router({ mergeParams: true });
 
 router
   .route('/')
-  .get(commentController.getCommentsByPost)
-  .post(validateComment, commentController.createComment);
+  .get(asyncHandler(commentController.getCommentsByPost))
+  .post(validateComment, asyncHandler(commentController.createComment));
 
-router.route('/:id').delete(commentController.deleteComment);
+router.route('/:id').delete(asyncHandler(commentController.deleteComment));
 
 module.exports = router;

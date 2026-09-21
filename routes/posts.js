@@ -1,8 +1,5 @@
 /**
- * routes/postRoutes.js — URL definitions for the /posts resource.
- *
- * Routes stay "thin": they only map method + path to controller functions
- * (plus any validation middleware that must run first).
+ * routes/posts.js — URL definitions for the /posts resource.
  *
  * | Method | Path                    | Handler                       |
  * |--------|-------------------------|-------------------------------|
@@ -13,13 +10,18 @@
  * | DELETE | /posts/:id              | deletePost                    |
  * | GET    | /posts/:postId/comments | getCommentsByPost  (nested)   |
  * | POST   | /posts/:postId/comments | createComment      (nested)   |
+ *
+ * These endpoints now read and write MongoDB. asyncHandler makes sure a
+ * rejected promise (for example "database down") reaches the error handler
+ * instead of hanging the request.
  */
 
 const express = require('express');
 
 const postController = require('../controllers/postController');
-const commentRoutes = require('./commentRoutes');
+const commentRoutes = require('./comments');
 const { validatePost } = require('../middleware/validation');
+const asyncHandler = require('../utils/asyncHandler');
 
 const router = express.Router();
 
@@ -30,13 +32,13 @@ router.use('/:postId/comments', commentRoutes);
 // --- Post CRUD ---------------------------------------------------------------
 router
   .route('/')
-  .get(postController.getPosts)
-  .post(validatePost, postController.createPost);
+  .get(asyncHandler(postController.getPosts))
+  .post(validatePost, asyncHandler(postController.createPost));
 
 router
   .route('/:id')
-  .get(postController.getPostById)
-  .put(validatePost, postController.updatePost)
-  .delete(postController.deletePost);
+  .get(asyncHandler(postController.getPostById))
+  .put(validatePost, asyncHandler(postController.updatePost))
+  .delete(asyncHandler(postController.deletePost));
 
 module.exports = router;
