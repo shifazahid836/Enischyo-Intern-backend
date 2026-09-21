@@ -284,7 +284,8 @@ GET /jobs?type=full-time
 GET /jobs?keyword=react&location=remote&type=full-time
 ```
 
-The response always echoes the filters that were applied and always populates the company:
+The response always echoes the filters that were applied and always populates the company
+(`createdAt`, `updatedAt` and the string `id` are omitted below for brevity):
 
 ```json
 {
@@ -427,14 +428,14 @@ curl.exe -s -X PUT http://localhost:5000/applications/<APPLICATION_ID> -H "Conte
   "success": false,
   "message": "Validation failed. Please check the highlighted fields.",
   "errors": [
-    "Job title must be at least 3 characters long.",
-    "Job description is required.",
-    "At least one requirement is required.",
-    "Minimum salary is required.",
-    "Maximum salary is required.",
-    "Job type is required.",
+    "company is required (use the company ObjectId).",
     "Location is required.",
-    "company is required (use the company ObjectId)."
+    "Job type is required.",
+    "Maximum salary is required.",
+    "Minimum salary is required.",
+    "Job description is required.",
+    "requirements must contain at least one item.",
+    "Job title must be at least 3 characters long."
   ]
 }
 ```

@@ -121,8 +121,13 @@ async function main() {
   check(`combined filters → ${combined.body.count} job(s) matching all three`, combined.status === 200 && combined.body.count >= 1, combined.body);
   check('combined filters keep company populated', combined.body.jobs.every((job) => typeof job.company === 'object' && !!job.company.name), combined.body.jobs.map((job) => job.company));
 
-  const upper = await api('GET', '/jobs?keyword=REACT&type=FULL-TIME');
-  check('filters are case-insensitive', upper.body.count === combined.body.count, upper.body.count);
+  const lowerCase = await api('GET', '/jobs?keyword=react&type=full-time');
+  const upperCase = await api('GET', '/jobs?keyword=REACT&type=FULL-TIME');
+  check(
+    'filters are case-insensitive (same result as lowercase)',
+    upperCase.body.count === lowerCase.body.count && upperCase.body.count > 0,
+    { upperCase: upperCase.body.count, lowerCase: lowerCase.body.count }
+  );
 
   const badType = await api('GET', '/jobs?type=banana');
   check('invalid ?type → 400 with errors array', badType.status === 400 && Array.isArray(badType.body.errors), badType.body);
@@ -165,7 +170,14 @@ async function main() {
   check('company populated in the response', createdJob && typeof createdJob.company === 'object' && !!createdJob.company.name, createdJob && createdJob.company);
   check('postedDate defaulted automatically', !!createdJob.postedDate, createdJob.postedDate);
   check('requirements trimmed + de-duplicated', JSON.stringify(createdJob.requirements) === JSON.stringify(['Node.js', 'MongoDB', 'Testing']), createdJob.requirements);
-  check('missing fields → 400 with several errors', (await api('POST', '/jobs', { title: 'x' })).status === 400);
+  const missingJobFields = await api('POST', '/jobs', { title: 'x' });
+  check(
+    'missing fields → 400 with one error per invalid field',
+    missingJobFields.status === 400 &&
+      Array.isArray(missingJobFields.body.errors) &&
+      missingJobFields.body.errors.length >= 8,
+    missingJobFields.body
+  );
   check('salaryMax < salaryMin → 400', (await api('POST', '/jobs', { ...payload, salaryMin: 90000, salaryMax: 10000 })).status === 400);
   check('invalid type enum → 400', (await api('POST', '/jobs', { ...payload, type: 'freelance' })).status === 400);
   check('malformed company id → 400', (await api('POST', '/jobs', { ...payload, company: 'nope' })).status === 400);

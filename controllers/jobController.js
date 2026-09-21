@@ -209,10 +209,15 @@ async function createJob(req, res) {
     );
   }
 
-  // Fail fast with a clear message instead of an E11000/CastError from Mongo
-  await ensureCompanyExists(jobData.company);
+  // Verify a company reference that WAS provided (friendly 400 / 404 messages).
+  // A missing "company" is left to the schema below, so the client gets ONE
+  // complete list of validation errors instead of a single message.
+  if (jobData.company !== undefined) {
+    await ensureCompanyExists(jobData.company);
+  }
 
-  const job = await Job.create(jobData);
+  const job = new Job(jobData);
+  await job.save(); // full schema validation runs here
   await job.populate('company');
 
   return res.status(201).json({

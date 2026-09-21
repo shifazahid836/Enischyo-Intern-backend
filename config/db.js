@@ -21,6 +21,10 @@ const CONNECT_TIMEOUT_MS = 10_000;
 
 let listenersAttached = false;
 
+// True while WE are closing the connection on purpose, so a graceful shutdown
+// (or a script such as seed.js) does not print a misleading warning.
+let intentionalDisconnect = false;
+
 /**
  * Attaches connection event logging exactly once.
  * Useful during development: you can see if Atlas drops the connection.
@@ -36,7 +40,8 @@ function attachConnectionListeners() {
   });
 
   connection.on('disconnected', () => {
-    console.warn('⚠️  MongoDB disconnected.');
+    if (intentionalDisconnect) return; // expected: we closed it ourselves
+    console.warn('⚠️  MongoDB disconnected unexpectedly.');
   });
 
   connection.on('error', (error) => {
@@ -67,6 +72,9 @@ async function connectDB(uri = process.env.MONGODB_URI) {
     return mongoose.connection;
   }
 
+  // A fresh connection means any previous close is history
+  intentionalDisconnect = false;
+
   await mongoose.connect(uri, {
     serverSelectionTimeoutMS: CONNECT_TIMEOUT_MS,
   });
@@ -81,6 +89,7 @@ async function connectDB(uri = process.env.MONGODB_URI) {
 async function disconnectDB() {
   if (mongoose.connection.readyState === 0) return;
 
+  intentionalDisconnect = true; // silence the "disconnected" warning above
   await mongoose.connection.close();
   console.log('🔌 MongoDB connection closed.');
 }

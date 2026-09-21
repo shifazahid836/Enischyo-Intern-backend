@@ -146,9 +146,14 @@ async function createApplication(req, res) {
     );
   }
 
-  await ensureJobExists(applicationData.job);
+  // Same idea as POST /jobs: only a PROVIDED reference is checked here, so a
+  // missing "job" produces the complete schema validation error list.
+  if (applicationData.job !== undefined) {
+    await ensureJobExists(applicationData.job);
+  }
 
-  const application = await Application.create(applicationData);
+  const application = new Application(applicationData);
+  await application.save(); // full schema validation runs here
   await application.populate(POPULATE_JOB_WITH_COMPANY);
 
   return res.status(201).json({
