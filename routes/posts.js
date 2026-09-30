@@ -22,6 +22,7 @@ const postController = require('../controllers/postController');
 const commentRoutes = require('./comments');
 const { validatePost } = require('../middleware/validation');
 const asyncHandler = require('../utils/asyncHandler');
+const { protect, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -39,6 +40,7 @@ router
   .route('/:id')
   .get(asyncHandler(postController.getPostById))
   .put(validatePost, asyncHandler(postController.updatePost))
-  .delete(asyncHandler(postController.deletePost));
+  // Deleting any resource is an admin action ("only admins can delete any resource").
+  .delete(protect, authorize('admin'), asyncHandler(postController.deletePost));
 
 module.exports = router;

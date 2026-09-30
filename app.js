@@ -32,6 +32,7 @@ const commentRoutes = require('./routes/comments');
 const companyRoutes = require('./routes/companies');
 const jobRoutes = require('./routes/jobs');
 const applicationRoutes = require('./routes/applications');
+const authRoutes = require('./routes/auth');
 
 const app = express();
 
@@ -69,6 +70,7 @@ app.get('/api/health', healthCheck);
  * The second form is what a Vite frontend proxy usually expects.
  */
 function mountApiRoutes(basePath) {
+  app.use(`${basePath}/auth`, requireDatabase, authRoutes); // register / login / me
   app.use(`${basePath}/jobs`, requireDatabase, jobRoutes);
   app.use(`${basePath}/companies`, requireDatabase, companyRoutes);
   app.use(`${basePath}/applications`, requireDatabase, applicationRoutes);

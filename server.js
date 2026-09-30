@@ -1,22 +1,9 @@
-/**
- * server.js — application entry point.
- *
- * Responsibilities (kept intentionally small):
- *   1. Load environment variables from .env
- *   2. Connect to MongoDB Atlas (a request needs the database, so the server
- *      only starts listening once the connection is ready)
- *   3. Start listening on the configured port
- *   4. Shut down cleanly (Ctrl+C, nodemon restart, crash)
- *
- * Run with:  npm run dev    (nodemon, auto-restart)
- *            npm start      (plain node)
- */
-
 // Load .env variables BEFORE anything else reads process.env
 require('dotenv').config();
 
 const app = require('./app');
 const { connectDB, disconnectDB } = require('./config/db');
+const { isJwtConfigured } = require('./utils/jwt');
 
 // Never hard-code the port: fall back to 5000 only if .env is missing PORT
 const PORT = Number(process.env.PORT) || 5000;
@@ -44,11 +31,22 @@ async function start() {
     process.exit(1);
   }
 
+  // Fail loudly (but keep running) when the JWT secret is missing: without it
+  // /auth/register and /auth/login answer 500 instead of issuing a token.
+  if (!isJwtConfigured()) {
+    console.warn('------------------------------------------------------------');
+    console.warn('⚠️  JWT_SECRET is missing or shorter than 32 characters.');
+    console.warn('   /auth/register and /auth/login will fail until it is set in .env.');
+    console.warn('   See .env.example for a one-line command that generates a good one.');
+    console.warn('------------------------------------------------------------');
+  }
+
   server = app.listen(PORT, () => {
     console.log('------------------------------------------------------------');
     console.log('🚀  Job Board API is running');
     console.log(`    Mode:         ${NODE_ENV}`);
     console.log(`    Base URL:     http://localhost:${PORT}`);
+    console.log(`    Auth:         http://localhost:${PORT}/auth/login`);
     console.log(`    Jobs:         http://localhost:${PORT}/jobs`);
     console.log(`    Companies:    http://localhost:${PORT}/companies`);
     console.log(`    Applications: http://localhost:${PORT}/applications`);

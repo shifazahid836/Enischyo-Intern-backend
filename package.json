@@ -9,6 +9,7 @@
     "dev": "nodemon server.js",
     "seed": "node seed.js",
     "test:validation": "node tests/validation-smoke.js",
+    "test:auth": "node tests/auth-smoke.js",
     "test:api": "node tests/api-smoke.js"
   },
   "keywords": [
@@ -23,8 +24,11 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "express-rate-limit": "^8.7.0",
+    "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.10.1",
     "morgan": "^1.10.0"
   },

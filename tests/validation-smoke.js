@@ -11,10 +11,22 @@
  */
 
 const assert = require('assert');
+const jwt = require('jsonwebtoken');
 
 const Company = require('../models/Company');
 const Job = require('../models/Job');
 const Application = require('../models/Application');
+const User = require('../models/User');
+
+const {
+  signToken,
+  verifyToken,
+  getJwtSecret,
+  isJwtConfigured,
+  getExpiresIn,
+  DEFAULT_EXPIRES_IN,
+  ISSUER,
+} = require('../utils/jwt');
 
 const { errorHandler, notFound } = require('../middleware/errorHandler');
 const { badRequest, notFound: httpNotFound } = require('../utils/httpError');
@@ -311,6 +323,131 @@ async function main() {
       failed += 1;
       failures.push('notFound()');
       console.log(`  ✗ notFound() → ${JSON.stringify(notFoundRes.captured)}`);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  group('models/User.js');
+  // ---------------------------------------------------------------------------
+
+  const validUser = new User({
+    name: 'Test User',
+    email: 'Test.User@Example.com',
+    password: 'StrongPass123!',
+  });
+
+  await shouldPass('accepts a valid user', validUser);
+  assert.strictEqual(validUser.email, 'test.user@example.com', 'email should be lower-cased');
+  assert.strictEqual(validUser.role, 'jobseeker', 'role should default to jobseeker');
+  assert.strictEqual(validUser.password, 'StrongPass123!', 'validate() does not hash — the pre-save hook does');
+
+  await shouldPass(
+    'accepts role "employer"',
+    new User({ name: 'Employer One', email: 'employer@example.com', password: 'StrongPass123!', role: 'employer' })
+  );
+  await shouldPass(
+    'accepts role "admin"',
+    new User({ name: 'Admin One', email: 'admin@example.com', password: 'StrongPass123!', role: 'admin' })
+  );
+
+  await shouldFail('rejects a missing name', new User({ email: 'a@example.com', password: 'StrongPass123!' }), /name/i);
+  await shouldFail('rejects an invalid email', new User({ name: 'Bad Email', email: 'not-an-email', password: 'StrongPass123!' }), /email/i);
+  await shouldFail('rejects a password shorter than 8 characters', new User({ name: 'Short Pass', email: 'short@example.com', password: '1234567' }), /at least 8/i);
+  await shouldFail('rejects an unknown role', new User({ name: 'Bad Role', email: 'role@example.com', password: 'StrongPass123!', role: 'wizard' }), /role/i);
+
+  // comparePassword() must fail loudly when a query forgot .select('+password')
+  const withoutHash = new User({ name: 'No Hash', email: 'nohash@example.com', password: 'StrongPass123!' });
+  await withoutHash.validate();
+  withoutHash.password = undefined;
+
+  let hashGuardFired = false;
+  try {
+    await withoutHash.comparePassword('StrongPass123!');
+  } catch (error) {
+    hashGuardFired = /select\("\+password"\)/.test(error.message);
+  }
+
+  if (hashGuardFired) {
+    passed += 1;
+    console.log('  ✓ comparePassword() explains how to load the hash');
+  } else {
+    failed += 1;
+    failures.push('comparePassword() guard');
+    console.log('  ✗ comparePassword() guard did not fire');
+  }
+
+  // ---------------------------------------------------------------------------
+  group('utils/jwt.js');
+  // ---------------------------------------------------------------------------
+
+  // jwt.js reads process.env on every call (nothing is cached at import time),
+  // so temporary values are enough — no server and no database needed.
+  const originalSecret = process.env.JWT_SECRET;
+  const originalExpiry = process.env.JWT_EXPIRES_IN;
+  process.env.JWT_SECRET = 'offline-test-secret-long-enough-to-pass-the-check-1234';
+  process.env.JWT_EXPIRES_IN = '7d';
+
+  const tokenUserId = '68d1f0a4e2b1c4d5e6f7a8b9';
+  const signedToken = signToken({ _id: tokenUserId, role: 'employer' });
+  const decoded = verifyToken(signedToken);
+
+  const jwtChecks = [
+    ['signToken() produces a three-part JWT', signedToken.split('.').length === 3],
+    ['verifyToken() returns the user id in `sub`', decoded.sub === tokenUserId],
+    ['the role travels inside the token', decoded.role === 'employer'],
+    ['the issuer is set', decoded.iss === ISSUER],
+    ['the default token lifetime is 7 days', DEFAULT_EXPIRES_IN === '7d'],
+    ['the signed token expires in 7 days', decoded.exp - decoded.iat === 7 * 24 * 60 * 60],
+    ['getExpiresIn() reports the configured value', getExpiresIn() === '7d'],
+    ['isJwtConfigured() is true for a long secret', isJwtConfigured() === true],
+  ];
+
+  let rejectedWrongSecret = false;
+  try {
+    jwt.verify(signedToken, 'a-completely-different-secret-that-is-also-long');
+  } catch (error) {
+    rejectedWrongSecret = error.name === 'JsonWebTokenError';
+  }
+  jwtChecks.push(['a token signed with another secret is rejected', rejectedWrongSecret]);
+
+  const expiredToken = jwt.sign(
+    { sub: tokenUserId, role: 'employer' },
+    process.env.JWT_SECRET,
+    { expiresIn: '-10s', issuer: ISSUER }
+  );
+
+  let detectedExpiry = false;
+  try {
+    verifyToken(expiredToken);
+  } catch (error) {
+    detectedExpiry = error.name === 'TokenExpiredError';
+  }
+  jwtChecks.push(['an expired token raises TokenExpiredError', detectedExpiry]);
+
+  let refusedShortSecret = false;
+  process.env.JWT_SECRET = 'too-short';
+  try {
+    getJwtSecret();
+  } catch (error) {
+    refusedShortSecret = /JWT_SECRET/.test(error.message) && isJwtConfigured() === false;
+  }
+  jwtChecks.push(['a missing / too-short JWT_SECRET is refused with a clear message', refusedShortSecret]);
+
+  // Restore the real environment (assigning undefined would store "undefined")
+  if (originalSecret === undefined) delete process.env.JWT_SECRET;
+  else process.env.JWT_SECRET = originalSecret;
+
+  if (originalExpiry === undefined) delete process.env.JWT_EXPIRES_IN;
+  else process.env.JWT_EXPIRES_IN = originalExpiry;
+
+  for (const [name, ok] of jwtChecks) {
+    if (ok) {
+      passed += 1;
+      console.log(`  ✓ ${name}`);
+    } else {
+      failed += 1;
+      failures.push(name);
+      console.log(`  ✗ ${name}`);
     }
   }
 

@@ -1,0 +1,1587 @@
+{
+  "info": {
+    "_postman_id": "c4e8a1d6-2f47-4b93-8d05-6e9f1a7b3c28",
+    "name": "Auth API - JWT + Roles (Task 3)",
+    "description": "Postman collection for the authentication / authorisation layer of the Enischyo job board API.\n\n## Before you start\n1. `cd backend`\n2. `npm run seed` (creates the 4 demo users used below + 15 jobs they own)\n3. `npm run dev`\n4. Send the requests in folder order — the tokens are captured automatically into collection variables.\n\n## Demo accounts (created by seed.js)\n| Role | Email | Password |\n|------|-------|----------|\n| admin | admin@enischyo.test | Admin12345! |\n| employer | employer1@enischyo.test | Employer12345! |\n| employer | employer2@enischyo.test | Employer12345! |\n| jobseeker | jobseeker1@enischyo.test | Jobseeker12345! |\n\n## How the tokens are handled\n`POST /auth/login` (and `POST /auth/register`) return a JWT. Each request in this collection runs a test script that stores the token in a collection variable (`adminToken`, `employerToken`, `otherEmployerToken`, `jobseekerToken`). The protected requests then send `Authorization: Bearer {{employerToken}}` automatically — no copy/pasting.\n\n## ⚠️ Login is rate limited\n`POST /auth/login` allows **5 attempts per 15 minutes per IP**. The login folder uses exactly 5, and the last request proves the 6th one is refused with **429**. After running that folder you must wait 15 minutes (or restart the server, because the counter is in memory) before logging in again.\n\n## Folders\n1. **Auth - Register** – validation, duplicate email, admin signup refused\n2. **Auth - Login** – the 5 attempts + the 429 rate-limit proof\n3. **Profile (/auth/me)** – token required / missing / invalid\n4. **Change Password** – PATCH /auth/change-password\n5. **Protected Jobs** – employer-only POST, owner-only PUT, owner-or-admin DELETE\n6. **Protected Applications** – jobseeker-only POST, admin-only PUT/DELETE\n7. **Admin Deletes** – 403 for non-admins, 200 for admins\n\nAll routes exist twice: `/auth/login` and `/api/auth/login`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Auth - Register",
+      "description": "POST /auth/register — public. The password is hashed with bcrypt (12 salt rounds) before it is stored, and it is never echoed back.",
+      "item": [
+        {
+          "name": "POST Register (jobseeker)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', function () { pm.response.to.have.status(201); });",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('Returns a JWT', function () {",
+                  "    pm.expect(json.token).to.be.a('string');",
+                  "    pm.expect(json.token.split('.')).to.have.lengthOf(3);",
+                  "    pm.expect(json.tokenType).to.eql('Bearer');",
+                  "    pm.expect(json.expiresIn).to.eql('7d');",
+                  "});",
+                  "",
+                  "pm.test('Role defaults to jobseeker', function () {",
+                  "    pm.expect(json.user.role).to.eql('jobseeker');",
+                  "});",
+                  "",
+                  "pm.test('The password hash is never returned', function () {",
+                  "    pm.expect(json.user).to.not.have.property('password');",
+                  "});",
+                  "",
+                  "// Stored for the requests that need a logged-in jobseeker",
+                  "pm.collectionVariables.set('jobseekerToken', json.token);",
+                  "pm.collectionVariables.set('jobseekerId', json.user.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman Jobseeker\",\n  \"email\": \"postman.jobseeker@enischyo.test\",\n  \"password\": \"Postman12345!\",\n  \"role\": \"jobseeker\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "register"]
+            },
+            "description": "Creates a jobseeker account. Run this BEFORE the login folder (registering does not consume the login budget)."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Register (employer)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "pm.test('Role is employer', function () { pm.expect(json.user.role).to.eql('employer'); });",
+                  "pm.collectionVariables.set('otherEmployerToken', json.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman Employer Two\",\n  \"email\": \"postman.employer2@enischyo.test\",\n  \"password\": \"Postman12345!\",\n  \"role\": \"employer\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "register"]
+            },
+            "description": "A SECOND employer. Its token is used to prove that an employer cannot edit a job posted by somebody else (403)."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Register - duplicate email (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', function () { pm.response.to.have.status(409); });",
+                  "pm.test('Explains the duplicate', function () {",
+                  "    pm.expect(pm.response.json().message).to.include('already exists');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Copy Cat\",\n  \"email\": \"postman.jobseeker@enischyo.test\",\n  \"password\": \"Postman12345!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "register"]
+            },
+            "description": "The unique index on `email` rejects the second account with 409."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Register - invalid email (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', function () { pm.response.to.have.status(400); });",
+                  "pm.test('errors[] explains the field', function () {",
+                  "    const errors = pm.response.json().errors;",
+                  "    pm.expect(errors).to.be.an('array');",
+                  "    pm.expect(errors.join(' ')).to.include('email');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Bad Email\",\n  \"email\": \"not-an-email\",\n  \"password\": \"Postman12345!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "register"]
+            },
+            "description": "Email format is checked with a regex before anything is written to MongoDB."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Register - short password (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Mentions the 8 character minimum', function () {",
+                  "    pm.expect(pm.response.json().errors.join(' ')).to.include('8');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Short Password\",\n  \"email\": \"short@enischyo.test\",\n  \"password\": \"1234567\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "register"]
+            },
+            "description": "Too-short passwords are refused before bcrypt ever runs."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Register - role=admin refused (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Admin signup is refused', function () {",
+                  "    pm.expect(pm.response.json().errors.join(' ')).to.include('admin');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Sneaky Admin\",\n  \"email\": \"sneaky.admin@enischyo.test\",\n  \"password\": \"Postman12345!\",\n  \"role\": \"admin\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "register"]
+            },
+            "description": "Public registration only accepts 'jobseeker' or 'employer'. Admins come from seed.js (or set ALLOW_ADMIN_REGISTRATION=true deliberately)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Auth - Login",
+      "description": "POST /auth/login — 5 attempts per 15 minutes. This folder uses exactly 5, then proves the 6th is refused with 429.",
+      "item": [
+        {
+          "name": "POST Login (admin) -> saves adminToken",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('Returns a 7-day token', function () {",
+                  "    pm.expect(json.token).to.be.a('string');",
+                  "    pm.expect(json.expiresIn).to.eql('7d');",
+                  "    pm.expect(json.user.role).to.eql('admin');",
+                  "});",
+                  "pm.test('Password hash is not leaked', function () {",
+                  "    pm.expect(json.user).to.not.have.property('password');",
+                  "});",
+                  "pm.collectionVariables.set('adminToken', json.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@enischyo.test\",\n  \"password\": \"Admin12345!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Login attempt 1 of 5. The token saved here is used by every admin request in this collection."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Login (employer) -> saves employerToken",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('Role is employer', function () { pm.expect(json.user.role).to.eql('employer'); });",
+                  "pm.collectionVariables.set('employerToken', json.token);",
+                  "pm.collectionVariables.set('employerId', json.user.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"employer1@enischyo.test\",\n  \"password\": \"Employer12345!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Login attempt 2 of 5. employer1 owns every other job created by seed.js."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Login (jobseeker)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Role is jobseeker', function () {",
+                  "    pm.expect(pm.response.json().user.role).to.eql('jobseeker');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"jobseeker1@enischyo.test\",\n  \"password\": \"Jobseeker12345!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Login attempt 3 of 5."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Login - wrong password (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Message does not reveal which part was wrong', function () {",
+                  "    pm.expect(pm.response.json().message).to.eql('Invalid email or password.');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@enischyo.test\",\n  \"password\": \"ThisIsWrong123!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Login attempt 4 of 5. bcrypt.compare() fails, so no token is issued. The message is identical to the 'unknown email' case on purpose."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Login - unknown email (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Same message as a wrong password', function () {",
+                  "    pm.expect(pm.response.json().message).to.eql('Invalid email or password.');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"ghost@enischyo.test\",\n  \"password\": \"Whatever123!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Login attempt 5 of 5 — the budget is now used up."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Login - 6th attempt (429 rate limited)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('429 Too Many Requests', function () { pm.response.to.have.status(429); });",
+                  "const json = pm.response.json();",
+                  "pm.test('Response uses the API error shape', function () {",
+                  "    pm.expect(json.success).to.eql(false);",
+                  "    pm.expect(json.errors).to.be.an('array');",
+                  "});",
+                  "pm.test('Tells the client to wait', function () {",
+                  "    pm.expect(json.message).to.include('Too many login attempts');",
+                  "});",
+                  "pm.test('RateLimit headers are present', function () {",
+                  "    pm.expect(pm.response.headers.has('ratelimit-limit')).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@enischyo.test\",\n  \"password\": \"Admin12345!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Even CORRECT credentials are refused once the limit is reached — that is the point of rate limiting. Run this request last: the counter lives in memory and resets after 15 minutes (or on server restart)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Profile (/auth/me)",
+      "description": "GET /auth/me — the auth middleware reads the Bearer token, verifies it with jsonwebtoken, loads the user and puts it on req.user.",
+      "item": [
+        {
+          "name": "GET /auth/me as admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('Returns the logged-in profile', function () {",
+                  "    pm.expect(json.user.email).to.eql('admin@enischyo.test');",
+                  "    pm.expect(json.user.role).to.eql('admin');",
+                  "});",
+                  "pm.test('No password field', function () {",
+                  "    pm.expect(json.user).to.not.have.property('password');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "me"]
+            },
+            "description": "Uses Bearer {{adminToken}} — captured automatically by the login request."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /auth/me as employer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Role is employer', function () {",
+                  "    pm.expect(pm.response.json().user.role).to.eql('employer');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{employerToken}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "me"]
+            },
+            "description": "The same endpoint returns a different profile for a different token — that is the JWT payload at work."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /auth/me - no token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Explains the expected header', function () {",
+                  "    pm.expect(pm.response.json().message).to.include('Authorization: Bearer');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "me"]
+            },
+            "description": "No Authorization header at all."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /auth/me - invalid token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Signature check failed', function () {",
+                  "    pm.expect(pm.response.json().message).to.include('Invalid token');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer not.a.real.token", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "me"]
+            },
+            "description": "jsonwebtoken verifies the signature, so a hand-made token is rejected."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /auth/users as employer (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden (not 401 — the token is valid)', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "pm.test('Explains the required role', function () {",
+                  "    pm.expect(pm.response.json().message).to.include('requires the role: admin');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{employerToken}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/users",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "users"]
+            },
+            "description": "Shows the difference between 401 (who are you?) and 403 (I know who you are, but you may not)."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /auth/users as admin (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Lists users without password hashes', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.users).to.be.an('array');",
+                  "    json.users.forEach(function (user) {",
+                  "        pm.expect(user).to.not.have.property('password');",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/users",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "users"]
+            },
+            "description": "Same request, admin token → 200."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Change Password",
+      "description": "PATCH /auth/change-password — requires a token and the CURRENT password. Uses the token from POST /auth/register, so it does not consume the login budget.",
+      "item": [
+        {
+          "name": "PATCH Change Password - wrong current password (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Rejects the wrong old password', function () {",
+                  "    pm.expect(pm.response.json().message).to.include('current password is incorrect');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{jobseekerToken}}", "type": "string" }]
+            },
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"oldPassword\": \"NotTheRealOne123!\",\n  \"newPassword\": \"BrandNew12345!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/change-password",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "change-password"]
+            },
+            "description": "bcrypt.compare() fails, so nothing is written."
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH Change Password - no token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"oldPassword\": \"Postman12345!\",\n  \"newPassword\": \"BrandNew12345!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/change-password",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "change-password"]
+            },
+            "description": "The route is protected, so an anonymous caller is stopped before any password logic runs."
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH Change Password (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('Returns a fresh token', function () {",
+                  "    pm.expect(json.token).to.be.a('string');",
+                  "});",
+                  "pm.test('Confirms the change', function () {",
+                  "    pm.expect(json.message).to.include('Password changed');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{jobseekerToken}}", "type": "string" }]
+            },
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"oldPassword\": \"Postman12345!\",\n  \"newPassword\": \"Postman67890!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/change-password",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "change-password"]
+            },
+            "description": "⚠️ Re-running the folder after this request needs the NEW password (Postman67890!) in POST /auth/register — or run `npm run seed` again, which resets the accounts."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Protected Jobs",
+      "description": "POST /jobs → employers only. PUT/DELETE /jobs/:id → only the employer who posted it (and, for DELETE, an admin).",
+      "item": [
+        {
+          "name": "GET /companies (public) -> saves a company id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "const companies = pm.response.json().companies;",
+                  "pm.test('Companies are available for the job body below', function () {",
+                  "    pm.expect(companies.length).to.be.above(0);",
+                  "});",
+                  "pm.collectionVariables.set('companyId', companies[0]._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/companies",
+              "host": ["{{baseUrl}}"],
+              "path": ["companies"]
+            },
+            "description": "Creates a company fills {{companyId}}, which the POST /jobs request below needs. Run this folder with the Collection Runner (or send the requests in order) so the variable exists in time."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /jobs (public) -> saves a seeded job id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK without a token (reading jobs is public)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const jobs = pm.response.json().jobs;",
+                  "pm.test('Seeded jobs carry an employer', function () {",
+                  "    pm.expect(jobs[0].employer).to.be.a('string');",
+                  "});",
+                  "pm.collectionVariables.set('seededJobId', jobs[0]._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/jobs",
+              "host": ["{{baseUrl}}"],
+              "path": ["jobs"]
+            },
+            "description": "GET stays open so the public job board keeps working. The id saved here is used by the 'other employer cannot edit' test."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /jobs as employer (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', function () { pm.response.to.have.status(201); });",
+                  "const job = pm.response.json().job;",
+                  "pm.test('The token owner is stored as employer', function () {",
+                  "    pm.expect(String(job.employer)).to.eql(pm.collectionVariables.get('employerId'));",
+                  "});",
+                  "pm.collectionVariables.set('jobId', job._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{employerToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Postman Protected Job\",\n  \"description\": \"A job created from Postman to prove that only an employer with a valid JWT can post a vacancy.\",\n  \"requirements\": [\"Postman\", \"JWT\"],\n  \"salaryMin\": 50000,\n  \"salaryMax\": 70000,\n  \"type\": \"remote\",\n  \"location\": \"Remote (Worldwide)\",\n  \"company\": \"{{companyId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/jobs",
+              "host": ["{{baseUrl}}"],
+              "path": ["jobs"]
+            },
+            "description": "Needs a real company ObjectId in {{companyId}} — the request above fills it automatically. The employer id is taken from the token, never from this body."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /jobs without a token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Anonymous Job\",\n  \"description\": \"Nobody should be able to create this without logging in first.\",\n  \"requirements\": [\"none\"],\n  \"salaryMin\": 1,\n  \"salaryMax\": 2,\n  \"type\": \"remote\",\n  \"location\": \"Nowhere\",\n  \"company\": \"{{companyId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/jobs",
+              "host": ["{{baseUrl}}"],
+              "path": ["jobs"]
+            },
+            "description": "protect runs before the controller, so the body is never even validated."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /jobs as jobseeker (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', function () { pm.response.to.have.status(403); });",
+                  "pm.test('Explains the required role', function () {",
+                  "    pm.expect(pm.response.json().message).to.include('employer');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{jobseekerToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Jobseeker Job\",\n  \"description\": \"A jobseeker must not be able to publish a vacancy on this platform.\",\n  \"requirements\": [\"none\"],\n  \"salaryMin\": 1,\n  \"salaryMax\": 2,\n  \"type\": \"remote\",\n  \"location\": \"Nowhere\",\n  \"company\": \"{{companyId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/jobs",
+              "host": ["{{baseUrl}}"],
+              "path": ["jobs"]
+            },
+            "description": "Valid token, wrong role → 403."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /jobs as admin (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden — only employers advertise jobs', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Admin Job\",\n  \"description\": \"An admin manages the platform; publishing vacancies stays an employer action.\",\n  \"requirements\": [\"none\"],\n  \"salaryMin\": 1,\n  \"salaryMax\": 2,\n  \"type\": \"remote\",\n  \"location\": \"Nowhere\",\n  \"company\": \"{{companyId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/jobs",
+              "host": ["{{baseUrl}}"],
+              "path": ["jobs"]
+            },
+            "description": "authorize('employer') is an exact role match, so admin is refused."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /jobs/:id as the owner (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Value changed', function () {",
+                  "    pm.expect(pm.response.json().job.salaryMax).to.eql(95000);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{employerToken}}", "type": "string" }]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"salaryMax\": 95000\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/jobs/{{jobId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["jobs", "{{jobId}}"]
+            },
+            "description": "The employer who posted the job may edit it. {{jobId}} comes from the create request above."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /jobs/:id as ANOTHER employer (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', function () { pm.response.to.have.status(403); });",
+                  "pm.test('Ownership message', function () {",
+                  "    pm.expect(pm.response.json().message).to.include('Only the employer who posted this job');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{otherEmployerToken}}", "type": "string" }]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"salaryMax\": 100000\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/jobs/{{seededJobId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["jobs", "{{seededJobId}}"]
+            },
+            "description": "A valid employer token, but the job belongs to employer1 → 403. This is the ownership rule in action."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /jobs/:id as admin (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden — admins may delete, not rewrite', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"salaryMax\": 100000\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/jobs/{{seededJobId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["jobs", "{{seededJobId}}"]
+            },
+            "description": "The spec allows only the owning employer to PUT."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /jobs/:id as the owner (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Cascade: its applications were deleted too', function () {",
+                  "    pm.expect(pm.response.json().deletedApplications).to.be.a('number');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{employerToken}}", "type": "string" }]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/jobs/{{jobId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["jobs", "{{jobId}}"]
+            },
+            "description": "Cleans up the job created earlier — the owner may delete it."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /jobs/:id as admin (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK — admins can delete any resource', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/jobs/{{seededJobId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["jobs", "{{seededJobId}}"]
+            },
+            "description": "⚠️ This really deletes a seeded job. Run `npm run seed` again to restore the sample data."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Protected Applications",
+      "description": "POST /applications → jobseekers only. PUT/DELETE → admins only.",
+      "item": [
+        {
+          "name": "GET /jobs (public) -> saves a job to apply to",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.collectionVariables.set('applyJobId', pm.response.json().jobs[0]._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/jobs",
+              "host": ["{{baseUrl}}"],
+              "path": ["jobs"]
+            },
+            "description": "Grabs a job id so the application below always has a valid target."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /applications as jobseeker (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', function () { pm.response.to.have.status(201); });",
+                  "const application = pm.response.json().application;",
+                  "pm.test('Status defaults to pending', function () {",
+                  "    pm.expect(application.status).to.eql('pending');",
+                  "});",
+                  "pm.collectionVariables.set('applicationId', application._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{jobseekerToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"{{applyJobId}}\",\n  \"applicantName\": \"Postman Jobseeker\",\n  \"email\": \"postman.applicant@enischyo.test\",\n  \"phone\": \"+92 300 1234567\",\n  \"coverLetter\": \"This application was sent from Postman with a jobseeker JWT to prove that only jobseekers can apply for a job.\",\n  \"resumeURL\": \"https://example.com/resume/postman.pdf\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/applications",
+              "host": ["{{baseUrl}}"],
+              "path": ["applications"]
+            },
+            "description": "A jobseeker token is required to reach the controller."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /applications without a token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"{{applyJobId}}\",\n  \"applicantName\": \"Anonymous\",\n  \"email\": \"anon@enischyo.test\",\n  \"phone\": \"+92 300 0000000\",\n  \"coverLetter\": \"An anonymous application must be refused before the body is validated at all.\",\n  \"resumeURL\": \"https://example.com/resume/anon.pdf\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/applications",
+              "host": ["{{baseUrl}}"],
+              "path": ["applications"]
+            },
+            "description": "The old, unprotected behaviour is gone: applying now requires an account."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /applications as employer (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden — only jobseekers apply', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "pm.test('Names the allowed role', function () {",
+                  "    pm.expect(pm.response.json().message).to.include('jobseeker');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{employerToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"{{applyJobId}}\",\n  \"applicantName\": \"Postman Employer\",\n  \"email\": \"postman.employer@enischyo.test\",\n  \"phone\": \"+92 300 7654321\",\n  \"coverLetter\": \"An employer applying to their own posting makes no sense, so the role gate refuses it.\",\n  \"resumeURL\": \"https://example.com/resume/employer.pdf\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/applications",
+              "host": ["{{baseUrl}}"],
+              "path": ["applications"]
+            },
+            "description": "Valid token, wrong role → 403."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /applications/:id as admin (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Status is now reviewed', function () {",
+                  "    pm.expect(pm.response.json().application.status).to.eql('reviewed');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"reviewed\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/applications/{{applicationId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["applications", "{{applicationId}}"]
+            },
+            "description": "Reviewing an application is a back-office action, so it is admin-only."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /applications/:id as jobseeker (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{jobseekerToken}}", "type": "string" }]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"accepted\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/applications/{{applicationId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["applications", "{{applicationId}}"]
+            },
+            "description": "A jobseeker cannot accept their own application."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /applications/:id as jobseeker (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{jobseekerToken}}", "type": "string" }]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/applications/{{applicationId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["applications", "{{applicationId}}"]
+            },
+            "description": "Only admins delete resources."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /applications/:id as admin (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/applications/{{applicationId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["applications", "{{applicationId}}"]
+            },
+            "description": "Cleans up the application created earlier."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "7. Admin Deletes",
+      "description": "\"Only admins can delete any resource\" — the same rule on the companies, posts and comments endpoints.",
+      "item": [
+        {
+          "name": "GET /companies (public) -> saves a company id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.collectionVariables.set('companyId', pm.response.json().companies[0]._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/companies",
+              "host": ["{{baseUrl}}"],
+              "path": ["companies"]
+            },
+            "description": "Also fills {{companyId}}, which the POST /jobs request in folder 5 needs."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /posts/:id without a token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts/1",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "1"]
+            },
+            "description": "The blog endpoints still read publicly, but deleting now needs an admin token."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /posts/:id as employer (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', function () { pm.response.to.have.status(403); });",
+                  "pm.test('Explains the required role', function () {",
+                  "    pm.expect(pm.response.json().message).to.include('admin');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{employerToken}}", "type": "string" }]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts/2",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "2"]
+            },
+            "description": "Being logged in is not enough — the role must be admin."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /comments/:id as admin (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Returns the deleted comment', function () {",
+                  "    pm.expect(pm.response.json().deletedComment).to.be.an('object');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/comments/6",
+              "host": ["{{baseUrl}}"],
+              "path": ["comments", "6"]
+            },
+            "description": "Deletes seeded comment 6. Run `npm run seed` to restore it."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /companies/:id as employer (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{employerToken}}", "type": "string" }]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/companies/{{companyId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["companies", "{{companyId}}"]
+            },
+            "description": "Deleting a company cascades to its jobs and applications, so it stays admin-only."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5000", "type": "string" },
+    { "key": "adminToken", "value": "", "type": "string" },
+    { "key": "employerToken", "value": "", "type": "string" },
+    { "key": "otherEmployerToken", "value": "", "type": "string" },
+    { "key": "jobseekerToken", "value": "", "type": "string" },
+    { "key": "employerId", "value": "", "type": "string" },
+    { "key": "jobseekerId", "value": "", "type": "string" },
+    { "key": "companyId", "value": "", "type": "string" },
+    { "key": "seededJobId", "value": "", "type": "string" },
+    { "key": "applyJobId", "value": "", "type": "string" },
+    { "key": "jobId", "value": "", "type": "string" },
+    { "key": "applicationId", "value": "", "type": "string" }
+  ]
+}

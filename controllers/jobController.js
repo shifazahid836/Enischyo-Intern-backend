@@ -13,7 +13,7 @@ const Job = require('../models/Job');
 const { JOB_TYPES } = require('../models/Job');
 const Company = require('../models/Company');
 const Application = require('../models/Application');
-const { badRequest, notFound } = require('../utils/httpError');
+const { badRequest, forbidden, notFound } = require('../utils/httpError');
 const {
   isValidObjectId,
   isNonEmptyString,
@@ -22,6 +22,10 @@ const {
 
 // Fields a client is allowed to send. Anything else (like _id or createdAt)
 // is ignored, which protects the document from accidental tampering.
+//
+// `employer` is deliberately missing from this list: it is always taken from
+// the verified JWT (see createJob), never from the request body — otherwise an
+// employer could publish a job in somebody else's name.
 const JOB_WRITABLE_FIELDS = [
   'title',
   'description',
@@ -152,6 +156,53 @@ async function ensureCompanyExists(companyId) {
 }
 
 /**
+ * True when `user` is the employer who created this posting.
+ *
+ * @param {import('mongoose').Document} job
+ * @param {{ _id: unknown }|undefined} user the req.user set by middleware/auth.js
+ * @returns {boolean}
+ */
+function isJobOwner(job, user) {
+  if (!job.employer || !user) return false;
+  return String(job.employer) === String(user._id);
+}
+
+/**
+ * Guard for PUT /jobs/:id — only the employer who posted the job may edit it.
+ * An admin may DELETE any resource but must not silently rewrite somebody's
+ * posting, so `admin` is intentionally not allowed through here.
+ *
+ * @param {import('mongoose').Document} job
+ * @param {object} user req.user
+ * @throws 403 when the caller does not own the job
+ */
+function assertCanEditJob(job, user) {
+  if (isJobOwner(job, user)) return;
+
+  if (!job.employer) {
+    throw forbidden(
+      'This job has no employer on record (it was created before authentication was added), so only an admin can change it.'
+    );
+  }
+
+  throw forbidden('Only the employer who posted this job can edit it.');
+}
+
+/**
+ * Guard for DELETE /jobs/:id — the owning employer OR any admin.
+ *
+ * @param {import('mongoose').Document} job
+ * @param {object} user req.user
+ * @throws 403 when the caller is neither the owner nor an admin
+ */
+function assertCanDeleteJob(job, user) {
+  if (user && user.role === 'admin') return;
+  if (isJobOwner(job, user)) return;
+
+  throw forbidden('Only the employer who posted this job (or an admin) can delete it.');
+}
+
+/**
  * GET /jobs
  * GET /jobs?keyword=react&location=remote&type=full-time
  *
@@ -216,6 +267,11 @@ async function createJob(req, res) {
     await ensureCompanyExists(jobData.company);
   }
 
+  // Ownership comes from the verified token, not from the request body:
+  // `protect` + `authorize('employer')` in routes/jobs.js guarantee that
+  // req.user is the logged-in employer.
+  jobData.employer = req.user._id;
+
   const job = new Job(jobData);
   await job.save(); // full schema validation runs here
   await job.populate('company');
@@ -246,6 +302,9 @@ async function updateJob(req, res) {
   if (!job) {
     throw notFound(`Job with id ${id} not found.`);
   }
+
+  // 403 unless the caller is the employer who created this posting.
+  assertCanEditJob(job, req.user);
 
   const jobData = pickWritableFields(req.body, JOB_WRITABLE_FIELDS);
 
@@ -286,6 +345,9 @@ async function deleteJob(req, res) {
   if (!job) {
     throw notFound(`Job with id ${id} not found.`);
   }
+
+  // The owning employer OR any admin may delete a posting.
+  assertCanDeleteJob(job, req.user);
 
   const deletedApplications = await Application.deleteMany({ job: job._id });
   await job.deleteOne();

@@ -59,10 +59,22 @@ async function main() {
   await new Promise((resolve) => server.once('listening', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
 
-  async function api(method, path, body) {
+  /**
+   * Small wrapper around fetch that returns { status, body }.
+   *
+   * @param {string}  method
+   * @param {string}  path
+   * @param {object}  [body]  JSON payload (omit for GET/DELETE)
+   * @param {string}  [token] raw JWT → sent as "Authorization: Bearer <token>"
+   */
+  async function api(method, path, body, token) {
+    const headers = {};
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (token) headers.Authorization = `Bearer ${token}`;
+
     const res = await fetch(base + path, {
       method,
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
 
@@ -84,6 +96,104 @@ async function main() {
   check('GET /health → 200 with database connected', health.status === 200 && health.body.database === 'connected', health.body);
   check(`seed created 5 companies (got ${summary.companies})`, summary.companies === 5, summary);
   check(`seed created 15 jobs (got ${summary.jobs})`, summary.jobs === 15, summary);
+  check(`seed created 4 users (got ${summary.users})`, summary.users === 4, summary);
+
+  // ===========================================================================
+  // AUTH
+  //
+  // The seeded demo accounts come from seed.js. Registration is also used here
+  // to get two extra tokens, because POST /auth/login is limited to 5 attempts
+  // per 15 minutes and the whole run shares that budget (see the note in the
+  // "Rate limiting" group at the end).
+  // ===========================================================================
+  const SEEDED = {
+    admin: { email: 'admin@enischyo.test', password: 'Admin12345!' },
+    employer: { email: 'employer1@enischyo.test', password: 'Employer12345!' },
+  };
+
+  const smokeJobseeker = {
+    name: 'Smoke Jobseeker',
+    email: 'smoke.jobseeker@enischyo.test',
+    password: 'SmokeJobseeker123!',
+  };
+  const smokeEmployer = {
+    name: 'Smoke Employer',
+    email: 'smoke.employer@enischyo.test',
+    password: 'SmokeEmployer123!',
+    role: 'employer',
+  };
+
+  group('POST /auth/register');
+  const registeredJobseeker = await api('POST', '/auth/register', smokeJobseeker);
+  const registeredEmployer = await api('POST', '/auth/register', smokeEmployer);
+
+  const jobseekerToken = registeredJobseeker.body.token;
+  const otherEmployerToken = registeredEmployer.body.token;
+
+  check(
+    'POST /auth/register → 201 with a JWT',
+    registeredJobseeker.status === 201 && typeof jobseekerToken === 'string' && jobseekerToken.split('.').length === 3,
+    registeredJobseeker.body
+  );
+  check('register defaults the role to jobseeker', registeredJobseeker.body.user.role === 'jobseeker', registeredJobseeker.body.user);
+  check('company-style role is accepted (employer)', registeredEmployer.status === 201 && registeredEmployer.body.user.role === 'employer', registeredEmployer.body.user);
+  check('the password hash is NEVER returned', 'password' in registeredJobseeker.body.user === false, registeredJobseeker.body.user);
+  check('the response reports the 7-day expiry', registeredJobseeker.body.expiresIn === '7d', registeredJobseeker.body.expiresIn);
+  check('duplicate email → 409 Conflict', (await api('POST', '/auth/register', { ...smokeJobseeker, name: 'Copy Cat' })).status === 409);
+  check('invalid email format → 400', (await api('POST', '/auth/register', { ...smokeJobseeker, email: 'not-an-email' })).status === 400);
+  check('password shorter than 8 characters → 400', (await api('POST', '/auth/register', { ...smokeJobseeker, email: 'short@enischyo.test', password: '1234567' })).status === 400);
+  check('missing name → 400', (await api('POST', '/auth/register', { email: 'noname@enischyo.test', password: 'SmokeJobseeker123!' })).status === 400);
+  check('role=admin in public registration → 400', (await api('POST', '/auth/register', { ...smokeJobseeker, email: 'sneaky@enischyo.test', role: 'admin' })).status === 400);
+  check('unknown role → 400', (await api('POST', '/auth/register', { ...smokeJobseeker, email: 'wizard@enischyo.test', role: 'wizard' })).status === 400);
+
+  group('GET /auth/me');
+  const meRequest = await api('GET', '/auth/me', undefined, otherEmployerToken);
+  check('GET /auth/me with a token → 200 and the right account', meRequest.status === 200 && meRequest.body.user.email === smokeEmployer.email, meRequest.body);
+  check('no Authorization header → 401', (await api('GET', '/auth/me')).status === 401);
+  check('malformed token → 401', (await api('GET', '/auth/me', undefined, 'not.a.real.token')).status === 401);
+  check('token signed with the wrong secret → 401', (await api('GET', '/auth/me', undefined, 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1NjciLCJyb2xlIjoiYWRtaW4ifQ.aaaa')).status === 401);
+
+  group('PATCH /auth/change-password');
+  const newJobseekerPassword = 'SmokeJobseeker456!';
+  check('no token → 401', (await api('PATCH', '/auth/change-password', { oldPassword: 'x'.repeat(8), newPassword: 'y'.repeat(8) })).status === 401);
+  check('missing fields → 400', (await api('PATCH', '/auth/change-password', {}, jobseekerToken)).status === 400);
+  check('wrong current password → 401', (await api('PATCH', '/auth/change-password', { oldPassword: 'WrongOld123!', newPassword: newJobseekerPassword }, jobseekerToken)).status === 401);
+  check('new password equal to the old one → 400', (await api('PATCH', '/auth/change-password', { oldPassword: smokeJobseeker.password, newPassword: smokeJobseeker.password }, jobseekerToken)).status === 400);
+  const changedPassword = await api('PATCH', '/auth/change-password', { oldPassword: smokeJobseeker.password, newPassword: newJobseekerPassword }, jobseekerToken);
+  check('PATCH /auth/change-password → 200', changedPassword.status === 200, changedPassword.body);
+  check('the response contains a fresh token', typeof changedPassword.body.token === 'string', changedPassword.body);
+
+  // ---------------------------------------------------------------------------
+  // POST /auth/login
+  //
+  // ⚠️  Every call below counts towards the 5-attempts-per-15-minutes limit, so
+  // this group is exactly 5 requests. The 6th attempt (the 429 check) is made in
+  // the "Rate limiting" group at the very end, once no more logins are needed.
+  // ---------------------------------------------------------------------------
+  group('POST /auth/login');
+  const oldPasswordLogin = await api('POST', '/auth/login', smokeJobseeker);
+  const newPasswordLogin = await api('POST', '/auth/login', { ...smokeJobseeker, password: newJobseekerPassword });
+  const unknownEmailLogin = await api('POST', '/auth/login', { email: 'ghost@enischyo.test', password: 'Whatever123!' });
+  const adminLogin = await api('POST', '/auth/login', SEEDED.admin);
+  const employerLogin = await api('POST', '/auth/login', SEEDED.employer);
+
+  const adminToken = adminLogin.body.token;
+  const employerToken = employerLogin.body.token;
+
+  check('the OLD password is rejected after the change → 401', oldPasswordLogin.status === 401, oldPasswordLogin.body);
+  check('the NEW password works → 200 with a token', newPasswordLogin.status === 200 && typeof newPasswordLogin.body.token === 'string', newPasswordLogin.body);
+  check('unknown email and wrong password give the same 401', unknownEmailLogin.status === 401 && oldPasswordLogin.body.message === unknownEmailLogin.body.message, { old: oldPasswordLogin.body.message, unknown: unknownEmailLogin.body.message });
+  check('POST /auth/login (admin) → 200', adminLogin.status === 200 && adminLogin.body.user.role === 'admin', adminLogin.body);
+  check('POST /auth/login (employer) → 200', employerLogin.status === 200 && employerLogin.body.user.role === 'employer', employerLogin.body);
+
+  // ---------------------------------------------------------------------------
+  // Role + ownership rules
+  // ---------------------------------------------------------------------------
+  group('Role + ownership guards');
+  check('GET /auth/users without a token → 401', (await api('GET', '/auth/users')).status === 401);
+  check('GET /auth/users as employer → 403 Forbidden', (await api('GET', '/auth/users', undefined, employerToken)).status === 403);
+  const allUsers = await api('GET', '/auth/users', undefined, adminToken);
+  check('GET /auth/users as admin → 200', allUsers.status === 200 && allUsers.body.count >= 4, allUsers.body.count);
 
   // ------------------------------------------------------------------- jobs
   group('GET /jobs');
@@ -164,13 +274,17 @@ async function main() {
     isActive: true,
   };
 
-  const created = await api('POST', '/jobs', payload);
+  const created = await api('POST', '/jobs', payload, employerToken);
   const createdJob = created.body.job;
   check('POST /jobs → 201', created.status === 201, created.body);
+  check('POST /jobs without a token → 401', (await api('POST', '/jobs', payload)).status === 401);
+  check('POST /jobs as a jobseeker → 403 Forbidden', (await api('POST', '/jobs', payload, jobseekerToken)).status === 403);
+  check('POST /jobs as an admin → 403 Forbidden (only employers advertise)', (await api('POST', '/jobs', payload, adminToken)).status === 403);
+  check('the token owner is stored as job.employer', String(createdJob.employer) === String(employerLogin.body.user.id), createdJob.employer);
   check('company populated in the response', createdJob && typeof createdJob.company === 'object' && !!createdJob.company.name, createdJob && createdJob.company);
   check('postedDate defaulted automatically', !!createdJob.postedDate, createdJob.postedDate);
   check('requirements trimmed + de-duplicated', JSON.stringify(createdJob.requirements) === JSON.stringify(['Node.js', 'MongoDB', 'Testing']), createdJob.requirements);
-  const missingJobFields = await api('POST', '/jobs', { title: 'x' });
+  const missingJobFields = await api('POST', '/jobs', { title: 'x' }, employerToken);
   check(
     'missing fields → 400 with one error per invalid field',
     missingJobFields.status === 400 &&
@@ -178,21 +292,36 @@ async function main() {
       missingJobFields.body.errors.length >= 8,
     missingJobFields.body
   );
-  check('salaryMax < salaryMin → 400', (await api('POST', '/jobs', { ...payload, salaryMin: 90000, salaryMax: 10000 })).status === 400);
-  check('invalid type enum → 400', (await api('POST', '/jobs', { ...payload, type: 'freelance' })).status === 400);
-  check('malformed company id → 400', (await api('POST', '/jobs', { ...payload, company: 'nope' })).status === 400);
-  check('unknown company id → 404', (await api('POST', '/jobs', { ...payload, company: missingId })).status === 404);
-  check('empty requirements array → 400', (await api('POST', '/jobs', { ...payload, requirements: [] })).status === 400);
+  check('salaryMax < salaryMin → 400', (await api('POST', '/jobs', { ...payload, salaryMin: 90000, salaryMax: 10000 }, employerToken)).status === 400);
+  check('invalid type enum → 400', (await api('POST', '/jobs', { ...payload, type: 'freelance' }, employerToken)).status === 400);
+  check('malformed company id → 400', (await api('POST', '/jobs', { ...payload, company: 'nope' }, employerToken)).status === 400);
+  check('unknown company id → 404', (await api('POST', '/jobs', { ...payload, company: missingId }, employerToken)).status === 404);
+  check('empty requirements array → 400', (await api('POST', '/jobs', { ...payload, requirements: [] }, employerToken)).status === 400);
+
+  // `employer` is not in JOB_WRITABLE_FIELDS, so a forged value must be ignored
+  const forgedEmployer = await api('POST', '/jobs', { ...payload, employer: missingId }, employerToken);
+  check('a client cannot set employer by hand (the field is ignored)', forgedEmployer.body.job.employer !== missingId, forgedEmployer.body.job.employer);
+  await api('DELETE', `/jobs/${forgedEmployer.body.job._id}`, undefined, employerToken); // keep the job count clean
 
   group('PUT + DELETE /jobs/:id');
-  const updated = await api('PUT', `/jobs/${createdJob._id}`, { salaryMax: 95000, title: 'Updated Smoke Test Engineer' });
-  check('PUT /jobs/:id → 200 and value changed', updated.status === 200 && updated.body.job.salaryMax === 95000, updated.body);
-  check('PUT revalidates the whole document (salaryMin) → 400', (await api('PUT', `/jobs/${createdJob._id}`, { salaryMin: 200000 })).status === 400);
-  check('PUT with no valid fields → 400', (await api('PUT', `/jobs/${createdJob._id}`, { nonsense: 1 })).status === 400);
-  check('PUT unknown id → 404', (await api('PUT', `/jobs/${missingId}`, { title: 'Whatever Name' })).status === 404);
-  check('DELETE /jobs/:id → 200', (await api('DELETE', `/jobs/${createdJob._id}`)).status === 200);
+  const updated = await api('PUT', `/jobs/${createdJob._id}`, { salaryMax: 95000, title: 'Updated Smoke Test Engineer' }, employerToken);
+  check('PUT by the owning employer → 200 and value changed', updated.status === 200 && updated.body.job.salaryMax === 95000, updated.body);
+  check('PUT without a token → 401', (await api('PUT', `/jobs/${createdJob._id}`, { salaryMax: 95000 })).status === 401);
+  check('PUT by a DIFFERENT employer → 403 Forbidden', (await api('PUT', `/jobs/${createdJob._id}`, { salaryMax: 95000 }, otherEmployerToken)).status === 403);
+  check('PUT by an admin → 403 (admins may delete, not edit)', (await api('PUT', `/jobs/${createdJob._id}`, { salaryMax: 95000 }, adminToken)).status === 403);
+  check('PUT revalidates the whole document (salaryMin) → 400', (await api('PUT', `/jobs/${createdJob._id}`, { salaryMin: 200000 }, employerToken)).status === 400);
+  check('PUT with no valid fields → 400', (await api('PUT', `/jobs/${createdJob._id}`, { nonsense: 1 }, employerToken)).status === 400);
+  check('PUT unknown id → 404', (await api('PUT', `/jobs/${missingId}`, { title: 'Whatever Name' }, employerToken)).status === 404);
+
+  const adminDeletable = await api('POST', '/jobs', payload, employerToken);
+  check(
+    'DELETE someone else\u2019s job as an admin → 200 (admins can delete any resource)',
+    (await api('DELETE', `/jobs/${adminDeletable.body.job._id}`, undefined, adminToken)).status === 200
+  );
+
+  check('DELETE by the owning employer → 200', (await api('DELETE', `/jobs/${createdJob._id}`, undefined, employerToken)).status === 200);
   check('deleted job is gone (404)', (await api('GET', `/jobs/${createdJob._id}`)).status === 404);
-  check('DELETE unknown id → 404', (await api('DELETE', `/jobs/${missingId}`)).status === 404);
+  check('DELETE unknown id → 404', (await api('DELETE', `/jobs/${missingId}`, undefined, employerToken)).status === 404);
 
   // ----------------------------------------------------------- company CRUD
   group('Companies');
@@ -221,7 +350,9 @@ async function main() {
 
   const updatedCompany = await api('PUT', `/companies/${createdCompany.body.company._id}`, { industry: 'Quality Assurance' });
   check('PUT /companies/:id → 200 and value changed', updatedCompany.status === 200 && updatedCompany.body.company.industry === 'Quality Assurance', updatedCompany.body);
-  check('DELETE /companies/:id → 200', (await api('DELETE', `/companies/${createdCompany.body.company._id}`)).status === 200);
+  check('DELETE /companies/:id without a token → 401', (await api('DELETE', `/companies/${createdCompany.body.company._id}`)).status === 401);
+  check('DELETE /companies/:id as an employer → 403', (await api('DELETE', `/companies/${createdCompany.body.company._id}`, undefined, employerToken)).status === 403);
+  check('DELETE /companies/:id as an admin → 200', (await api('DELETE', `/companies/${createdCompany.body.company._id}`, undefined, adminToken)).status === 200);
 
   // ------------------------------------------------------- application CRUD
   group('Applications');
@@ -243,24 +374,28 @@ async function main() {
     resumeURL: 'https://drive.example.com/resumes/smoke-tester.pdf',
   };
 
-  const createdApplication = await api('POST', '/applications', applicationPayload);
+  const createdApplication = await api('POST', '/applications', applicationPayload, jobseekerToken);
   check('POST /applications → 201', createdApplication.status === 201, createdApplication.body);
+  check('POST /applications without a token → 401', (await api('POST', '/applications', applicationPayload)).status === 401);
+  check('POST /applications as an employer → 403 (only jobseekers apply)', (await api('POST', '/applications', applicationPayload, employerToken)).status === 403);
   check('status defaults to "pending"', createdApplication.body.application.status === 'pending', createdApplication.body.application.status);
   check('appliedAt defaults to now', !!createdApplication.body.application.appliedAt, createdApplication.body.application.appliedAt);
-  check('missing job → 400', (await api('POST', '/applications', { ...applicationPayload, job: undefined })).status === 400);
-  check('unknown job id → 404', (await api('POST', '/applications', { ...applicationPayload, job: missingId })).status === 404);
-  check('invalid email → 400', (await api('POST', '/applications', { ...applicationPayload, email: 'not-an-email' })).status === 400);
-  check('invalid phone → 400', (await api('POST', '/applications', { ...applicationPayload, phone: 'call me' })).status === 400);
-  check('too-short cover letter → 400', (await api('POST', '/applications', { ...applicationPayload, coverLetter: 'too short' })).status === 400);
-  check('invalid status enum → 400', (await api('POST', '/applications', { ...applicationPayload, status: 'maybe' })).status === 400);
+  check('missing job → 400', (await api('POST', '/applications', { ...applicationPayload, job: undefined }, jobseekerToken)).status === 400);
+  check('unknown job id → 404', (await api('POST', '/applications', { ...applicationPayload, job: missingId }, jobseekerToken)).status === 404);
+  check('invalid email → 400', (await api('POST', '/applications', { ...applicationPayload, email: 'not-an-email' }, jobseekerToken)).status === 400);
+  check('invalid phone → 400', (await api('POST', '/applications', { ...applicationPayload, phone: 'call me' }, jobseekerToken)).status === 400);
+  check('too-short cover letter → 400', (await api('POST', '/applications', { ...applicationPayload, coverLetter: 'too short' }, jobseekerToken)).status === 400);
+  check('invalid status enum → 400', (await api('POST', '/applications', { ...applicationPayload, status: 'maybe' }, jobseekerToken)).status === 400);
 
-  const updatedApplication = await api('PUT', `/applications/${createdApplication.body.application._id}`, { status: 'reviewed' });
-  check('PUT /applications/:id → 200 and status changed', updatedApplication.status === 200 && updatedApplication.body.application.status === 'reviewed', updatedApplication.body);
+  const updatedApplication = await api('PUT', `/applications/${createdApplication.body.application._id}`, { status: 'reviewed' }, adminToken);
+  check('PUT /applications/:id as an admin → 200 and status changed', updatedApplication.status === 200 && updatedApplication.body.application.status === 'reviewed', updatedApplication.body);
+  check('PUT /applications/:id as a jobseeker → 403', (await api('PUT', `/applications/${createdApplication.body.application._id}`, { status: 'rejected' }, jobseekerToken)).status === 403);
 
   const filtered = await api('GET', `/applications?job=${firstJob._id}`);
   check('GET /applications?job=<id> filters correctly', filtered.body.count >= 1 && filtered.body.applications.every((item) => item.job._id === firstJob._id), filtered.body.count);
   check('invalid ?status → 400', (await api('GET', '/applications?status=maybe')).status === 400);
-  check('DELETE /applications/:id → 200', (await api('DELETE', `/applications/${createdApplication.body.application._id}`)).status === 200);
+  check('DELETE /applications/:id as a jobseeker → 403', (await api('DELETE', `/applications/${createdApplication.body.application._id}`, undefined, jobseekerToken)).status === 403);
+  check('DELETE /applications/:id as an admin → 200', (await api('DELETE', `/applications/${createdApplication.body.application._id}`, undefined, adminToken)).status === 200);
 
   // ------------------------------------------------------------ blog + misc
   group('Blog endpoints (MongoDB backed)');
@@ -277,7 +412,8 @@ async function main() {
 
   const newComment = await api('POST', '/posts/1/comments', { body: 'A comment created by the smoke test.', author: 'Smoke Tester' });
   check('POST /posts/1/comments → 201', newComment.status === 201, newComment.body);
-  check('DELETE /comments/:id → 200', (await api('DELETE', `/comments/${newComment.body.comment.id}`)).status === 200);
+  check('DELETE /comments/:id without a token → 401', (await api('DELETE', `/comments/${newComment.body.comment.id}`)).status === 401);
+  check('DELETE /comments/:id as an admin → 200', (await api('DELETE', `/comments/${newComment.body.comment.id}`, undefined, adminToken)).status === 200);
 
   group('Routing + error handling');
   const namespaced = await api('GET', '/api/jobs');
@@ -291,6 +427,18 @@ async function main() {
     body: '{ "title": "broken json" ',
   });
   check('malformed JSON → 400', brokenJsonResponse.status === 400);
+
+  // ------------------------------------------------------ rate limiting
+  // POST /auth/login allows 5 attempts per 15 minutes. The "POST /auth/login"
+  // group above already used exactly 5, so these two requests must be refused.
+  // (This runs LAST on purpose: once the limit is hit, no further login can
+  // succeed in this process.)
+  group('Rate limiting');
+  const sixthAttempt = await api('POST', '/auth/login', SEEDED.admin);
+  const seventhAttempt = await api('POST', '/auth/login', SEEDED.admin);
+  check('6th login attempt within 15 minutes → 429', sixthAttempt.status === 429, sixthAttempt.body);
+  check('429 body uses the API error shape', sixthAttempt.body.success === false && Array.isArray(sixthAttempt.body.errors), sixthAttempt.body);
+  check('still limited on the 7th attempt → 429', seventhAttempt.status === 429, seventhAttempt.status);
 
   // ------------------------------------------------------ sample responses
   console.log('\n════════════ SAMPLE RESPONSES ════════════');
@@ -308,8 +456,8 @@ async function main() {
   console.log('\nGET /jobs/:id');
   console.log(JSON.stringify((await api('GET', `/jobs/${firstJob._id}`)).body, null, 2).slice(0, 1600));
 
-  console.log('\nPOST /jobs with an invalid body → 400');
-  console.log(JSON.stringify((await api('POST', '/jobs', { title: 'x' })).body, null, 2));
+  console.log('\nPOST /jobs with an invalid body (as an employer) → 400');
+  console.log(JSON.stringify((await api('POST', '/jobs', { title: 'x' }, employerToken)).body, null, 2));
 
   console.log('\nGET /applications (first item)');
   console.log(JSON.stringify(firstApplication, null, 2).slice(0, 1500));

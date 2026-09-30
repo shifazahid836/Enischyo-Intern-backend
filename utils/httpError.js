@@ -38,6 +38,16 @@ function conflict(message) {
   return createHttpError(409, message);
 }
 
+/** 401 — no token, or an invalid/expired one. The client must log in again. */
+function unauthorized(message) {
+  return createHttpError(401, message);
+}
+
+/** 403 — authenticated, but the role / ownership rules forbid this action. */
+function forbidden(message) {
+  return createHttpError(403, message);
+}
+
 /** 503 — the server is up but the database is not reachable right now. */
 function serviceUnavailable(message) {
   return createHttpError(503, message);
@@ -48,5 +58,7 @@ module.exports = {
   badRequest,
   notFound,
   conflict,
+  unauthorized,
+  forbidden,
   serviceUnavailable,
 };

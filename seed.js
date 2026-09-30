@@ -6,9 +6,10 @@
  *
  * What it does:
  *   1. Connects to MongoDB Atlas using MONGODB_URI from .env
- *   2. Clears the existing Company / Job / Application / Post / Comment records
- *   3. Inserts 5 companies, 15 jobs (each referencing a seeded company),
- *      3 sample applications and the original blog posts + comments
+ *   2. Clears the existing User / Company / Job / Application / Post / Comment records
+ *   3. Inserts 4 demo users (1 admin, 2 employers, 1 jobseeker), 5 companies,
+ *      15 jobs (each referencing a seeded company AND employer), 3 sample
+ *      applications and the original blog posts + comments
  *   4. Prints a summary and closes the connection
  *
  * Every document below is validated by the Mongoose schemas, so a typo in the
@@ -24,6 +25,7 @@ const Job = require('./models/Job');
 const Application = require('./models/Application');
 const Post = require('./models/Post');
 const Comment = require('./models/Comment');
+const User = require('./models/User');
 
 // ---------------------------------------------------------------------------
 // Seed data
@@ -492,6 +494,43 @@ const commentSeedData = [
   { id: 6, postId: 5, author: 'Bilal Ahmed', body: 'Central error handling really does remove a lot of repetition.' },
 ];
 
+/**
+ * 4 demo accounts — one per role you need while testing the auth endpoints.
+ *
+ * The passwords are written in PLAIN TEXT here on purpose: the User model's
+ * pre-save hook hashes each one with bcrypt (12 salt rounds) before it reaches
+ * the database, so no plain password is ever stored.
+ *
+ * ⚠️  These credentials are development-only. They also appear in the README
+ * and in the Postman collection, so never seed accounts like this in production.
+ */
+const userSeedData = [
+  {
+    name: 'Ayesha Khan',
+    email: 'admin@enischyo.test',
+    password: 'Admin12345!',
+    role: 'admin',
+  },
+  {
+    name: 'Bilal Ahmed',
+    email: 'employer1@enischyo.test',
+    password: 'Employer12345!',
+    role: 'employer',
+  },
+  {
+    name: 'Sara Malik',
+    email: 'employer2@enischyo.test',
+    password: 'Employer12345!',
+    role: 'employer',
+  },
+  {
+    name: 'Hamza Tariq',
+    email: 'jobseeker1@enischyo.test',
+    password: 'Jobseeker12345!',
+    role: 'jobseeker',
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -520,7 +559,7 @@ function daysFromNowDate(days) {
  *   await seedDatabase({ keepConnection: true });
  *
  * @param {{ keepConnection?: boolean, silent?: boolean }} [options]
- * @returns {Promise<{ companies: number, jobs: number, applications: number, posts: number, comments: number }>}
+ * @returns {Promise<{ users: number, companies: number, jobs: number, applications: number, posts: number, comments: number }>}
  */
 async function seedDatabase(options = {}) {
   const { keepConnection = false, silent = false } = options;
@@ -535,6 +574,7 @@ async function seedDatabase(options = {}) {
     // 1. Remove the previous data (order matters only for readability here)
     log('🧹 Clearing existing collections...');
     const removed = await Promise.all([
+      User.deleteMany({}),
       Company.deleteMany({}),
       Job.deleteMany({}),
       Application.deleteMany({}),
@@ -543,22 +583,33 @@ async function seedDatabase(options = {}) {
     ]);
 
     log(
-      `   removed → companies: ${removed[0].deletedCount}, jobs: ${removed[1].deletedCount}, ` +
-        `applications: ${removed[2].deletedCount}, posts: ${removed[3].deletedCount}, ` +
-        `comments: ${removed[4].deletedCount}`
+      `   removed → users: ${removed[0].deletedCount}, companies: ${removed[1].deletedCount}, ` +
+        `jobs: ${removed[2].deletedCount}, applications: ${removed[3].deletedCount}, ` +
+        `posts: ${removed[4].deletedCount}, comments: ${removed[5].deletedCount}`
     );
 
     // 2. Companies first — jobs need their ObjectIds
     const companies = await Company.create(companySeedData);
     log(`🏢 Created ${companies.length} companies.`);
 
-    // 3. Jobs, with the company reference resolved to a real ObjectId
-    const jobDocuments = jobSeedData.map((job) => {
+    // 3. Users — the accounts that own the postings below.
+    //    User.create() triggers the schema's pre-save hook, so every password is
+    //    stored as a bcrypt hash (12 salt rounds) and never in plain text.
+    const users = await User.create(userSeedData);
+    const employers = users.filter((user) => user.role === 'employer');
+    log(`👤 Created ${users.length} users (${employers.length} employer accounts).`);
+
+    // 4. Jobs, with the company + employer references resolved to real ObjectIds
+    const jobDocuments = jobSeedData.map((job, index) => {
       const { companyIndex, daysAgo, deadlineInDays, ...jobFields } = job;
 
       return {
         ...jobFields,
         company: companies[companyIndex]._id,
+        // Employers take turns, so several postings have different owners — that
+        // is what makes the "only the employer who posted it can edit it" rule
+        // testable in Postman.
+        employer: employers[index % employers.length]._id,
         postedDate: daysAgoDate(daysAgo),
         deadline: daysFromNowDate(deadlineInDays),
       };
@@ -567,7 +618,7 @@ async function seedDatabase(options = {}) {
     const jobs = await Job.create(jobDocuments);
     log(`💼 Created ${jobs.length} jobs.`);
 
-    // 4. Applications, each pointing at one of the jobs above
+    // 5. Applications, each pointing at one of the jobs above
     const applicationDocuments = applicationSeedData.map((application) => {
       const { jobIndex, ...applicationFields } = application;
 
@@ -581,13 +632,14 @@ async function seedDatabase(options = {}) {
     const applications = await Application.create(applicationDocuments);
     log(`📨 Created ${applications.length} applications.`);
 
-    // 5. Blog posts + comments (the original API, now also in MongoDB)
+    // 6. Blog posts + comments (the original API, now also in MongoDB)
     const posts = await Post.create(postSeedData);
     const comments = await Comment.create(commentSeedData);
     log(`📝 Created ${posts.length} posts and ${comments.length} comments.`);
 
     log('');
     log('✅ Seed complete');
+    log(`   Users:        ${users.length}`);
     log(`   Companies:    ${companies.length}`);
     log(`   Jobs:         ${jobs.length}`);
     log(`   Applications: ${applications.length}`);
@@ -595,6 +647,7 @@ async function seedDatabase(options = {}) {
     log(`   Comments:     ${comments.length}`);
 
     return {
+      users: users.length,
       companies: companies.length,
       jobs: jobs.length,
       applications: applications.length,

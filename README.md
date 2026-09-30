@@ -5,6 +5,11 @@ A REST API for a job board, built with **Node.js**, **Express.js**, **MongoDB At
 a dynamic job search endpoint, schema-level validation, centralised error handling and a
 seed script that fills the database with realistic sample data.
 
+Authentication is JWT based: accounts have a role (`jobseeker`, `employer` or `admin`),
+passwords are hashed with **bcrypt** (12 salt rounds) and the write endpoints are guarded
+by `protect` + `authorize(...)` middleware — see
+[Authentication, roles & protected routes](#-authentication-roles--protected-routes).
+
 > 🗄️ **All data lives in MongoDB Atlas.** The in-memory JavaScript arrays that used to sit in
 > `data/` are gone: `models/` are Mongoose models and `config/db.js` is the only place that
 > knows the connection string. The original blog endpoints (`/posts`, `/comments`) are still
@@ -19,7 +24,9 @@ seed script that fills the database with realistic sample data.
 | Base URL | `http://localhost:5000` |
 | Available at | `http://localhost:5000/jobs` **and** `http://localhost:5000/api/jobs` |
 | Database | MongoDB Atlas (free tier) via Mongoose |
-| Seed data | 5 companies, 15 jobs, 3 applications, 12 posts, 6 comments |
+| Seed data | 4 users, 5 companies, 15 jobs, 3 applications, 12 posts, 6 comments |
+| User roles | `jobseeker`, `employer`, `admin` |
+| Auth | JWT Bearer token (`Authorization: Bearer <token>`), 7-day expiry, bcrypt hashes (12 rounds) |
 | Job types | `full-time`, `part-time`, `remote` |
 | Application statuses | `pending`, `reviewed`, `accepted`, `rejected` |
 
@@ -33,7 +40,10 @@ seed script that fills the database with realistic sample data.
 | **Express.js** | Routing and middleware framework for the API |
 | **MongoDB Atlas** | Cloud-hosted MongoDB database |
 | **Mongoose** | Schemas, validation, references (`populate`) and queries |
-| **dotenv** | Loads `MONGODB_URI` and `PORT` from `.env` (never hard-coded) |
+| **bcrypt** | Hashes passwords before they are stored (salt rounds = 12) |
+| **jsonwebtoken** | Signs the token on register/login and verifies it on every protected request |
+| **express-rate-limit** | Login brute-force protection: 5 attempts per 15 minutes |
+| **dotenv** | Loads `MONGODB_URI`, `JWT_SECRET` and `PORT` from `.env` (never hard-coded) |
 | **morgan** | HTTP request logging (method, URL, status, response time) |
 | **nodemon** | Development tool that restarts the server on file changes |
 | **Postman** | Manual testing of every endpoint |
@@ -47,20 +57,24 @@ backend/
 ├── config/
 │   └── db.js                     # connectDB / disconnectDB (the only Mongo entry point)
 ├── models/
+│   ├── User.js                   # name, email (unique), password (bcrypt hash), role, createdAt
 │   ├── Company.js                # name, logo, website, description, industry, foundedYear
 │   ├── Job.js                    # title, description, requirements[], salaryMin/Max, type,
-│   │                             #   location, company (ObjectId ref), postedDate, deadline
+│   │                             #   location, company (ObjectId ref), employer (ObjectId ref),
+│   │                             #   postedDate, deadline
 │   ├── Application.js            # job (ObjectId ref), applicantName, email, phone,
 │   │                             #   coverLetter, resumeURL, status, appliedAt
 │   ├── Post.js                   # blog posts (kept for the original API, numeric ids)
 │   └── Comment.js                # blog comments (kept for the original API, numeric ids)
 ├── controllers/
+│   ├── authController.js         # register / login / me / change-password (+ admin user list)
 │   ├── jobController.js          # list / read / create / update / delete + search filters
 │   ├── companyController.js      # CRUD (+ cascade delete of its jobs)
 │   ├── applicationController.js  # CRUD (+ verifies the job exists, populates it)
 │   ├── postController.js         # blog posts (MongoDB backed)
 │   └── commentController.js      # blog comments (MongoDB backed)
 ├── routes/
+│   ├── auth.js                   # /auth (register, login, me, change-password)
 │   ├── jobs.js                   # /jobs
 │   ├── companies.js              # /companies
 │   ├── applications.js           # /applications
@@ -69,20 +83,27 @@ backend/
 ├── middleware/
 │   ├── cors.js                   # allows the frontend dev server to call the API
 │   ├── logger.js                 # morgan + custom response-time logger
+│   ├── auth.js                   # protect (Bearer token → req.user) + authorize(...roles)
+│   ├── rateLimit.js              # loginLimiter: 5 attempts / 15 minutes per IP
 │   ├── validation.js             # post/comment body validation
-│   ├── errorHandler.js           # 404 handler + central 400/409/500/503 translation
+│   ├── errorHandler.js           # 404 handler + central 400/401/403/429/500/503 translation
 │   └── requireDatabase.js        # replies 503 instead of hanging when Atlas is down
 ├── utils/
 │   ├── validation.js             # email / phone / URL / ObjectId helpers (shared)
-│   ├── httpError.js              # errors that carry an HTTP status code
+│   ├── jwt.js                    # signToken / verifyToken (secret + 7-day expiry in one place)
+│   ├── httpError.js              # errors that carry an HTTP status code (401 / 403 included)
 │   └── asyncHandler.js           # forwards async errors to the error handler
 ├── app.js                        # express app: middleware + route mounting
 ├── server.js                     # entry point: connect to MongoDB, then listen
-├── seed.js                       # `npm run seed` → fills the database
+├── seed.js                       # `npm run seed` → fills the database (users included)
+├── postman/
+│   ├── Blog-API.postman_collection.json   # the original blog / jobs collection
+│   └── Auth-API.postman_collection.json   # JWT + roles: every protected route
 ├── tests/
 │   ├── validation-smoke.js       # `npm run test:validation` (no database needed)
+│   ├── auth-smoke.js             # `npm run test:auth` (stubs User.findById, no database)
 │   └── api-smoke.js              # `npm run test:api` (real HTTP + MongoDB)
-├── .env                          # MONGODB_URI + PORT (git-ignored, never committed)
+├── .env                          # MONGODB_URI + JWT_SECRET + PORT (git-ignored)
 ├── .env.example                  # template with placeholders only
 ├── .gitignore                    # keeps .env and node_modules out of Git
 └── package.json
@@ -98,14 +119,22 @@ and `config/db.js` owns the connection. Nothing else touches MongoDB.
 
 ```bash
 cd backend
-npm install                 # 1. install dependencies (express, mongoose, dotenv, morgan)
+npm install                 # 1. install dependencies (express, mongoose, bcrypt, jsonwebtoken, …)
 copy .env.example .env      # 2. create your env file (Windows: copy  |  macOS/Linux: cp)
-#   3. open .env and paste your own MONGODB_URI (see the next section)
-npm run seed                # 4. fill the database with sample data
+#   3. open .env and set MONGODB_URI + JWT_SECRET (see the next sections)
+npm run seed                # 4. fill the database with sample data (users included)
 npm run dev                 # 5. start the server with nodemon
 ```
 
 Then open <http://localhost:5000/jobs> — you should see the 15 seeded jobs.
+
+Log in right away with a seeded account to get a token:
+
+```bash
+curl -X POST http://localhost:5000/auth/login \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"admin@enischyo.test\",\"password\":\"Admin12345!\"}"
+```
 
 ---
 
@@ -253,16 +282,29 @@ If the connection fails you get a checklist instead of a stack trace:
 
 Every route is available both at the root (`/jobs`) and under `/api` (`/api/jobs`).
 
+🔒 = needs `Authorization: Bearer <token>` · 👤 = additionally needs a specific role or ownership.
+
+### Auth
+
+| Method | Endpoint | Auth | Description |
+| --- | --- | --- | --- |
+| `POST` | `/auth/register` | public | Create a `jobseeker` / `employer` account and get a JWT. `role: "admin"` is refused |
+| `POST` | `/auth/login` | public · **5 per 15 min** | Verify the password with bcrypt, get a 7-day JWT |
+| `GET` | `/auth/me` | 🔒 | The logged-in profile (from the token) |
+| `PATCH` | `/auth/change-password` | 🔒 | `{ oldPassword, newPassword }` → re-hashes, returns a fresh token |
+| `GET` | `/auth/users` | 🔒👤 admin | List accounts (never includes password hashes) |
+| `DELETE` | `/auth/users/:id` | 🔒👤 admin | Delete an account (cannot delete your own) |
+
 ### Jobs
 
-| Method | Endpoint | Description |
-| --- | --- | --- |
-| `GET` | `/jobs` | All jobs, newest first, company populated. Supports the search filters below |
-| `GET` | `/jobs?keyword=react&location=remote&type=full-time` | Dynamic search (see below) |
-| `GET` | `/jobs/:id` | One job (company populated) · `404` when it does not exist |
-| `POST` | `/jobs` | Create a job (validates the body + verifies the company exists) |
-| `PUT` | `/jobs/:id` | Update a job (re-validates the merged document) |
-| `DELETE` | `/jobs/:id` | Delete a job (also deletes its applications) |
+| Method | Endpoint | Auth | Description |
+| --- | --- | --- | --- |
+| `GET` | `/jobs` | public | All jobs, newest first, company populated. Supports the search filters below |
+| `GET` | `/jobs?keyword=react&location=remote&type=full-time` | public | Dynamic search (see below) |
+| `GET` | `/jobs/:id` | public | One job (company populated) · `404` when it does not exist |
+| `POST` | `/jobs` | 🔒👤 employer | Create a job (validates the body + verifies the company exists) |
+| `PUT` | `/jobs/:id` | 🔒👤 owning employer | Update a job (re-validates the merged document) |
+| `DELETE` | `/jobs/:id` | 🔒👤 owner **or** admin | Delete a job (also deletes its applications) |
 
 ### Search: `GET /jobs`
 
@@ -318,39 +360,208 @@ The response always echoes the filters that were applied and always populates th
 
 ### Companies
 
-| Method | Endpoint | Description |
-| --- | --- | --- |
-| `GET` | `/companies` | All companies (alphabetical) |
-| `GET` | `/companies/:id` | One company + `jobCount` |
-| `POST` | `/companies` | Create a company (duplicate name → `409`) |
-| `PUT` | `/companies/:id` | Update a company |
-| `DELETE` | `/companies/:id` | Delete a company **and** its jobs and their applications |
+| Method | Endpoint | Auth | Description |
+| --- | --- | --- | --- |
+| `GET` | `/companies` | public | All companies (alphabetical) |
+| `GET` | `/companies/:id` | public | One company + `jobCount` |
+| `POST` | `/companies` | public | Create a company (duplicate name → `409`) |
+| `PUT` | `/companies/:id` | public | Update a company |
+| `DELETE` | `/companies/:id` | 🔒👤 admin | Delete a company **and** its jobs and their applications |
 
 ### Applications
 
-| Method | Endpoint | Description |
-| --- | --- | --- |
-| `GET` | `/applications` | All applications, job + company populated. Filters: `?job=<id>`, `?status=pending` |
-| `GET` | `/applications/:id` | One application |
-| `POST` | `/applications` | Create an application (verifies the job exists, status defaults to `pending`) |
-| `PUT` | `/applications/:id` | Update an application (typically the `status`) |
-| `DELETE` | `/applications/:id` | Delete an application |
+| Method | Endpoint | Auth | Description |
+| --- | --- | --- | --- |
+| `GET` | `/applications` | public | All applications, job + company populated. Filters: `?job=<id>`, `?status=pending` |
+| `GET` | `/applications/:id` | public | One application |
+| `POST` | `/applications` | 🔒👤 jobseeker | Create an application (verifies the job exists, status defaults to `pending`) |
+| `PUT` | `/applications/:id` | 🔒👤 admin | Update an application (typically the `status`) |
+| `DELETE` | `/applications/:id` | 🔒👤 admin | Delete an application |
 
 ### Blog (original API, now MongoDB backed)
 
-| Method | Endpoint | Description |
-| --- | --- | --- |
-| `GET` | `/posts` | Paginated posts (10 per page) |
-| `POST` | `/posts` | Create a post |
-| `GET` / `PUT` / `DELETE` | `/posts/:id` | Read / update / delete a post |
-| `GET` / `POST` | `/posts/:postId/comments` | Comments of a post |
-| `DELETE` | `/comments/:id` | Delete a comment |
+| Method | Endpoint | Auth | Description |
+| --- | --- | --- | --- |
+| `GET` | `/posts` | public | Paginated posts (10 per page) |
+| `POST` | `/posts` | public | Create a post |
+| `GET` / `PUT` | `/posts/:id` | public | Read / update a post |
+| `DELETE` | `/posts/:id` | 🔒👤 admin | Delete a post |
+| `GET` / `POST` | `/posts/:postId/comments` | public | Comments of a post |
+| `DELETE` | `/comments/:id` | 🔒👤 admin | Delete a comment |
+
+> **Note on the spec.** The task listed four rules: employers only for `POST /jobs`, the
+> owning employer for `PUT`/`DELETE /jobs/:id`, jobseekers only for `POST /applications`,
+> and admins for deleting any resource. Those are implemented exactly as written. The blog
+> write endpoints (`POST /posts`, `PUT /posts/:id`, `POST /posts/:postId/comments`) and
+> `POST`/`PUT /companies` were left open so the original frontend flow keeps working — they
+> can be locked down the same way by adding `protect, authorize('employer', 'admin')`
+> to those handlers in `routes/posts.js` and `routes/companies.js`.
 
 ### Health
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Server status + **database state** (works even when Atlas is down) |
+
+---
+
+## 🔐 Authentication, roles & protected routes
+
+### 1. The `User` model
+
+`models/User.js` stores `name`, `email` (unique + lower-cased), `password` (bcrypt hash),
+`role` (`jobseeker` | `employer` | `admin`) and `createdAt`.
+
+Three layers keep the password safe:
+
+1. a `pre('save')` hook hashes it with **bcrypt (12 salt rounds)** every time it changes;
+2. the field is `select: false`, so a normal query does not even load it;
+3. a `toJSON` / `toObject` transform deletes it from every response.
+
+Passwords are compared with `user.comparePassword(plain)` (`bcrypt.compare`) — never `===`,
+because bcrypt hashes are salted and the same password produces a different hash each time.
+
+### 2. Register and log in
+
+```http
+POST /auth/register
+Content-Type: application/json
+
+{ "name": "Ali Raza", "email": "ali@example.com", "password": "StrongPass123!", "role": "employer" }
+```
+
+```json
+{
+  "success": true,
+  "message": "Account created successfully.",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "tokenType": "Bearer",
+  "expiresIn": "7d",
+  "user": {
+    "id": "68d1f0a4e2b1c4d5e6f7a8b9",
+    "name": "Ali Raza",
+    "email": "ali@example.com",
+    "role": "employer",
+    "createdAt": "2026-09-27T10:15:02.031Z"
+  }
+}
+```
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{ "email": "ali@example.com", "password": "StrongPass123!" }
+```
+
+Both endpoints return the same body shape. The token payload is `{ sub: <user id>, role }`
+and it is valid for **7 days** (`JWT_EXPIRES_IN` in `.env`, default `7d`).
+
+Registration validation order: required fields → e-mail format → password length (8–72) →
+role → duplicate e-mail (`409`) → Mongoose schema. `role: "admin"` is refused unless
+`ALLOW_ADMIN_REGISTRATION=true` is set deliberately.
+
+### 3. Sending the token
+
+```http
+GET /auth/me
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+`middleware/auth.js` (`protect`) then:
+
+1. reads the token from the `Authorization: Bearer <token>` header;
+2. verifies signature **and** expiry with `jsonwebtoken` (`utils/jwt.js`);
+3. re-loads the user from MongoDB, so a deleted account or a changed role takes effect
+   immediately instead of being trusted from a 7-day-old token;
+4. attaches the document to `req.user`.
+
+| Situation | Result |
+| --- | --- |
+| Missing / malformed header | `401 Authentication required. Send an "Authorization: Bearer <token>" header …` |
+| Bad signature | `401 Invalid token. Please log in again.` |
+| Expired token | `401 Your token has expired. Please log in again.` |
+| Valid token, wrong role | `403 Access denied. This action requires the role: …` |
+
+### 4. Who may do what
+
+```js
+// routes/jobs.js
+router.route('/')
+  .get(asyncHandler(jobController.listJobs))                                   // public
+  .post(protect, authorize('employer'), asyncHandler(jobController.createJob));
+
+router.route('/:id')
+  .get(asyncHandler(jobController.getJobById))                                 // public
+  .put(protect, authorize('employer'), asyncHandler(jobController.updateJob))  // + owner check
+  .delete(protect, authorize('employer', 'admin'), asyncHandler(jobController.deleteJob));
+```
+
+| Action | Rule | Enforced in |
+| --- | --- | --- |
+| `POST /jobs` | `employer` only (a jobseeker **or** an admin gets `403`) | `routes/jobs.js` → `authorize('employer')` |
+| `PUT /jobs/:id` | only the employer stored in `job.employer` | `controllers/jobController.js` → `assertCanEditJob()` |
+| `DELETE /jobs/:id` | the owning employer **or** any admin | `controllers/jobController.js` → `assertCanDeleteJob()` |
+| `POST /applications` | `jobseeker` only | `routes/applications.js` → `authorize('jobseeker')` |
+| `PUT` / `DELETE /applications/:id` | `admin` only | `routes/applications.js` → `authorize('admin')` |
+| `DELETE /companies/:id`, `POST`/`DELETE /posts/:id`, `DELETE /comments/:id` | `admin` only | those route files → `authorize('admin')` |
+| `GET /auth/users`, `DELETE /auth/users/:id` | `admin` only | `routes/auth.js` → `authorize('admin')` |
+
+`job.employer` is **never** taken from the request body (it is not in `JOB_WRITABLE_FIELDS`):
+`createJob` copies `req.user._id`, so nobody can publish a vacancy in somebody else's name.
+
+### 5. Change password
+
+```http
+PATCH /auth/change-password
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{ "oldPassword": "StrongPass123!", "newPassword": "EvenStronger456!" }
+```
+
+The current password is verified with bcrypt, the new one is re-hashed by the same pre-save
+hook, and a fresh token is returned. ⚠️ Tokens issued **before** the change stay valid until
+they expire (a JWT is stateless). To invalidate them, add a `passwordChangedAt` date to the
+user and compare it with the token's `iat` claim inside `middleware/auth.js`.
+
+### 6. Rate limiting the login route
+
+`middleware/rateLimit.js` uses **express-rate-limit**: 5 attempts per 15 minutes per IP.
+The 6th request is refused **before** bcrypt runs, so an attacker cannot even make the
+server do work:
+
+```json
+{
+  "success": false,
+  "message": "Too many login attempts. Try again in 15 minutes.",
+  "errors": ["login is limited to 5 attempts per 15 minutes."],
+  "retryAfterSeconds": 842
+}
+```
+
+`RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` response headers are sent as
+well. The counter is kept in memory, so it resets on restart and is **not** shared between
+several instances (use the Redis store for that). `POST /auth/register` has a looser limiter
+(30 requests / 15 minutes).
+
+### 7. Try it in Postman
+
+Import `postman/Auth-API.postman_collection.json` (7 folders, 45 requests). It covers every
+rule above — including the `401`, `403` and `429` cases — and stores each token in a
+collection variable automatically, so the protected requests already send the right header.
+
+Demo accounts created by `npm run seed`:
+
+| Role | Email | Password |
+| --- | --- | --- |
+| admin | `admin@enischyo.test` | `Admin12345!` |
+| employer | `employer1@enischyo.test` | `Employer12345!` |
+| employer | `employer2@enischyo.test` | `Employer12345!` |
+| jobseeker | `jobseeker1@enischyo.test` | `Jobseeker12345!` |
+
+> ⚠️ Development-only credentials. They live in `seed.js` on purpose, so never ship this seed
+> data to a real deployment.
 
 ---
 
@@ -444,12 +655,13 @@ curl.exe -s -X PUT http://localhost:5000/applications/<APPLICATION_ID> -H "Conte
 
 ## 🧪 Automated tests
 
-Two dependency-free scripts are included (they only use Node's built-in `fetch`):
+Three dependency-free scripts are included (they only use Node's built-in `fetch`):
 
 | Command | What it checks | Needs a database? |
 | --- | --- | --- |
-| `npm run test:validation` | every Mongoose rule (required fields, enums, URL / e-mail / phone formats, salary range, deadline order) **and** every error-handler mapping (400 / 404 / 409 / 500 / 503) | ❌ no |
-| `npm run test:api` | every endpoint over real HTTP: the job search filters, CRUD for jobs / companies / applications, populated company references, validation errors, 404s and the blog endpoints | ✅ yes (Atlas) |
+| `npm run test:validation` | 66 offline checks: every Mongoose rule (required fields, enums, URL / e-mail / phone formats, salary range, deadline order, the `User` role + password rules) **and** the JWT helpers (sign / verify / expiry / wrong secret) **and** every error-handler mapping (400 / 404 / 409 / 500 / 503) | ❌ no |
+| `npm run test:auth` | 85 offline checks of the whole auth layer: the bcrypt pre-save hook (cost 12, idempotent, never leaks the password), `protect` (missing / malformed / invalid / expired token, deleted account, `req.user` attached), `authorize` (401 vs 403, the exact role rules), the controllers (register / login / me / change-password happy paths **and** their 400 / 401 / 409 branches) and the job-ownership rules (`PUT`/`DELETE` by owner vs stranger vs admin). `User.findById` is stubbed, so **no database is needed** | ❌ no |
+| `npm run test:api` | every endpoint over real HTTP: register / login / `me` / change-password, the 401 + 403 rules on every protected route, the 429 login limit, the job search filters, CRUD for jobs / companies / applications, populated company references and the blog endpoints | ✅ yes (Atlas) |
 
 `npm run test:validation` output (excerpt):
 
@@ -459,21 +671,26 @@ Two dependency-free scripts are included (they only use Node's built-in `fetch`)
   ✓ rejects an empty requirements array
   ✓ rejects salaryMax < salaryMin
   ✓ rejects a deadline before postedDate
-── middleware/errorHandler.js ────────────────────────────────
-  ✓ Mongoose ValidationError → 400 with per-field errors
-  ✓ duplicate key (11000) → 409
-  ✓ MongooseServerSelectionError → 503
+── models/User.js ────────────────────────────────────────────
+  ✓ accepts a valid user
+  ✓ rejects a password shorter than 8 characters
+  ✓ rejects an unknown role
+  ✓ comparePassword() explains how to load the hash
+── utils/jwt.js ──────────────────────────────────────────────
+  ✓ the signed token expires in 7 days
+  ✓ an expired token raises TokenExpiredError
+  ✓ a token signed with another secret is rejected
 ═══════════════════════════════════════════════════════════
-RESULT: 47 passed, 0 failed
+RESULT: 66 passed, 0 failed
 ```
 
 `npm run test:api` prints a `✓`/`✗` line per check, then real sample responses
 (`GET /jobs?keyword=react&location=remote&type=full-time`, `GET /jobs/:id`,
 an invalid `POST /jobs`, `GET /applications`) that you can copy into your report.
 
-> ⚠️ `npm run test:api` runs `seed.js` first, which **clears** the Company, Job,
-> Application, Post and Comment collections before inserting the sample data.
-> Point it at the same development database you seed.
+> ⚠️ `npm run test:api` runs `seed.js` first, which **clears** the User, Company, Job,
+> Application, Post and Comment collections before inserting the sample data (including the
+> 4 demo accounts). Point it at the same development database you seed.
 
 ---
 
@@ -484,6 +701,11 @@ console) and cannot be bypassed.
 
 | Model | Field | Rules |
 | --- | --- | --- |
+| **User** | `name` | required, trimmed, 2–80 chars |
+| | `email` | required, valid e-mail format, stored lowercase, **unique** (duplicate → `409`) |
+| | `password` | required, 8–72 chars, **hashed with bcrypt (12 salt rounds)** before saving, never returned by the API |
+| | `role` | one of `jobseeker`, `employer`, `admin` — defaults to `jobseeker` |
+| | `createdAt` | defaults to the current date/time |
 | **Company** | `name` | required, trimmed, 2–100 chars, **unique** (duplicate → `409`) |
 | | `logo` | optional, but must be a valid URL when provided |
 | | `website` | required, valid URL |
@@ -532,6 +754,11 @@ All errors use the same JSON shape, produced by `middleware/errorHandler.js`:
 | Referenced company / job does not exist | `404` | `Company with id … does not exist. Create the company first.` |
 | Resource not found | `404` | `Job with id … not found.` |
 | Unknown route | `404` | `Route not found` |
+| Missing / invalid / expired token | `401` | `Authentication required. Send an "Authorization: Bearer <token>" header …` |
+| Wrong login credentials | `401` | `Invalid email or password.` (same message for an unknown email and a wrong password) |
+| Wrong role for the action | `403` | `Access denied. This action requires the role: employer.` |
+| Editing somebody else's job | `403` | `Only the employer who posted this job can edit it.` |
+| More than 5 login attempts in 15 minutes | `429` | `Too many login attempts. Try again in 15 minutes.` |
 | Duplicate value (unique index) | `409` | `A record with this name already exists ("TechCorp").` |
 | Unexpected server error | `500` | `Internal Server Error` (details hidden in production) |
 | Database unreachable | `503` | `Database is not connected, so this request cannot be served right now.` |
@@ -542,10 +769,18 @@ All errors use the same JSON shape, produced by `middleware/errorHandler.js`:
 
 - The connection string lives **only** in `backend/.env` — there is no hard-coded URI
   anywhere in the source code (`config/db.js` reads `process.env.MONGODB_URI`).
+- `JWT_SECRET` also lives only in `.env` (`utils/jwt.js` reads `process.env.JWT_SECRET`).
+  Anyone who knows it can mint a token for **any** user, so treat it like a password:
+  at least 32 random characters, different per environment. Generate one with:
+  `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`.
+- Passwords are stored as bcrypt hashes (12 salt rounds) and the `password` field is
+  `select: false` **and** stripped by a `toJSON` transform, so it cannot leak in a response.
+- `POST /auth/register` refuses `role: "admin"`; admins come from `seed.js` or another admin.
 - `.env` is listed in both `.gitignore` files, so it is never committed.
 - `.env.example` contains **placeholders only** and is safe to commit.
 - If a credential ever leaks, rotate the password in Atlas → *Database Access* →
-  *Edit User* → *Edit Password*.
+  *Edit User* → *Edit Password*, and change `JWT_SECRET` (which invalidates every existing
+  token, because the signature no longer matches).
 
 `.env` (git-ignored):
 
@@ -554,6 +789,9 @@ PORT=5000
 NODE_ENV=development
 CORS_ORIGIN=*
 MONGODB_URI=mongodb+srv://<db_username>:<db_password>@<cluster>.mongodb.net/jobboard?retryWrites=true&w=majority
+JWT_SECRET=<at least 32 random characters — never reuse the placeholder>
+JWT_EXPIRES_IN=7d
+ALLOW_ADMIN_REGISTRATION=false
 ```
 
 Before pushing to GitHub, confirm the file is ignored:

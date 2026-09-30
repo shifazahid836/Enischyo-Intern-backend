@@ -103,6 +103,18 @@ const jobSchema = new mongoose.Schema(
       required: [true, 'company is required (use the company ObjectId).'],
     },
 
+    // The employer who created this posting. It is NEVER taken from the request
+    // body — the auth middleware puts the logged-in user on req.user and the
+    // controller stores that id, so nobody can post a job in someone else's name.
+    // It is optional in the schema so the seed data (and any job created before
+    // authentication existed) stays valid; a job without an employer can only be
+    // changed or deleted by an admin.
+    employer: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+
     postedDate: {
       type: Date,
       default: Date.now, // sensible default: now
@@ -140,6 +152,9 @@ const jobSchema = new mongoose.Schema(
 
 // Speeds up "all jobs of this company" and the populate() on GET /jobs
 jobSchema.index({ company: 1 });
+
+// Speeds up "all jobs posted by this employer" (job ownership checks / profile)
+jobSchema.index({ employer: 1 });
 
 // Simple text-style searches on title / description (used with case-insensitive
 // regex in controllers/jobController.js) and newest-first listing.

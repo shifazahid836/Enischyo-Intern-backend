@@ -20,6 +20,7 @@ const express = require('express');
 const commentController = require('../controllers/commentController');
 const { validateComment } = require('../middleware/validation');
 const asyncHandler = require('../utils/asyncHandler');
+const { protect, authorize } = require('../middleware/auth');
 
 // `mergeParams` keeps :postId available when mounted under /posts/:postId
 const router = express.Router({ mergeParams: true });
@@ -29,6 +30,9 @@ router
   .get(asyncHandler(commentController.getCommentsByPost))
   .post(validateComment, asyncHandler(commentController.createComment));
 
-router.route('/:id').delete(asyncHandler(commentController.deleteComment));
+// Deleting any resource is an admin action ("only admins can delete any resource").
+router
+  .route('/:id')
+  .delete(protect, authorize('admin'), asyncHandler(commentController.deleteComment));
 
 module.exports = router;
