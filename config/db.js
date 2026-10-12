@@ -25,6 +25,11 @@ let listenersAttached = false;
 // (or a script such as seed.js) does not print a misleading warning.
 let intentionalDisconnect = false;
 
+// The connection currently being opened, if any. A serverless runtime can
+// receive several requests before the first connection is ready; without this
+// each of them would open its own pool.
+let pendingConnection = null;
+
 /**
  * Attaches connection event logging exactly once.
  * Useful during development: you can see if Atlas drops the connection.
@@ -72,14 +77,24 @@ async function connectDB(uri = process.env.MONGODB_URI) {
     return mongoose.connection;
   }
 
+  // Someone else is already opening it: hand back the same promise.
+  if (pendingConnection) {
+    return pendingConnection;
+  }
+
   // A fresh connection means any previous close is history
   intentionalDisconnect = false;
 
-  await mongoose.connect(uri, {
-    serverSelectionTimeoutMS: CONNECT_TIMEOUT_MS,
-  });
+  pendingConnection = mongoose
+    .connect(uri, {
+      serverSelectionTimeoutMS: CONNECT_TIMEOUT_MS,
+    })
+    .then(() => mongoose.connection)
+    .finally(() => {
+      pendingConnection = null;
+    });
 
-  return mongoose.connection;
+  return pendingConnection;
 }
 
 /**

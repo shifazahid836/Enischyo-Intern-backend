@@ -803,6 +803,84 @@ git ls-files | findstr .env   # should print nothing (Windows)
 
 ---
 
+## 🌍 Deploying to Vercel
+
+The frontend and the API are **two separate Vercel projects**; this repository
+is the API. The React app lives in
+[`Enischyo-Intern-frontend-`](https://github.com/shifazahid836/Enischyo-Intern-frontend-).
+
+Vercel runs an Express app as **one Vercel Function** on
+[Fluid compute](https://vercel.com/docs/fluid-compute) — no `builds` block and
+no server adapter. [`vercel.json`](./vercel.json) pins the framework so
+detection can never guess wrong:
+
+```json
+{ "framework": "express" }
+```
+
+Vercel finds the app by looking for a file named `app`/`index`/`server` at the
+project root **that imports the `express` package**. Exactly one file here
+qualifies — [`app.js`](./app.js), which exports the app with
+`module.exports = app`. [`server.js`](./server.js) still drives local
+development (`npm start`); it does not import Express, so Vercel ignores it.
+
+### Environment variables
+
+Set these in **Project → Settings → Environment Variables**, for both
+*Production* and *Preview*. They are never committed — `.env` is git-ignored.
+
+| Name | Value |
+| --- | --- |
+| `MONGODB_URI` | Your Atlas connection string, exactly as in the local `.env` |
+| `JWT_SECRET` | Your 32+ character signing secret |
+| `NODE_ENV` | `production` |
+| `CORS_ORIGIN` | The deployed frontend origin, e.g. `https://techjobs.vercel.app` |
+
+The Node version does not need its own variable: `package.json → engines.node`
+(`22.x`) pins it, which is the minimum Mongoose 9 supports.
+
+Then add `0.0.0.0/0` to Atlas → **Network Access**. Vercel Functions have no
+static outbound IPs, so an IP allow-list is not an option.
+
+### What happens on a cold start
+
+A long-running server connects once at boot; a serverless function has no boot
+step. The connection is therefore opened **lazily, on first use**:
+
+- [`middleware/requireDatabase.js`](./middleware/requireDatabase.js) awaits
+  `connectDB()` before any database-backed route runs, and answers `503` with
+  the reason if it cannot open the connection;
+- `GET /health` warms the connection too, so it reports `"database":"connected"`
+  rather than the `disconnected` a fresh instance starts with;
+- [`config/db.js`](./config/db.js) hands every concurrent caller the *same*
+  in-flight promise, so parallel requests share one pool instead of opening
+  several.
+
+Nothing in the request path needs `server.js`, and a cold start pays the Atlas
+handshake once (~1.5s).
+
+### Verify the deployment
+
+```bash
+curl https://<your-api>.vercel.app/health
+# {"success":true,...,"database":"connected"}
+curl https://<your-api>.vercel.app/api/jobs
+```
+
+Because `framework: "express"` routes **every** path to Express, and `app.js`
+mounts each resource under both `/` and `/api`, both `/jobs` and `/api/jobs`
+answer.
+
+### Local server vs. Vercel
+
+| | Local (`npm start`) | Vercel |
+| --- | --- | --- |
+| Connection | opened once at boot | opened on first use, reused while warm |
+| `express-rate-limit` store | one shared memory | per instance, so limits are approximate |
+| `express.static()` | serves files | ignored — use `public/**` (unused here) |
+
+---
+
 ## 🧯 Troubleshooting
 
 | Problem | Cause & fix |

@@ -25,7 +25,7 @@ const cors = require('./middleware/cors');
 const { morganLogger, requestLogger } = require('./middleware/logger');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 const requireDatabase = require('./middleware/requireDatabase');
-const { getConnectionState } = require('./config/db');
+const { connectDB, getConnectionState } = require('./config/db');
 
 const postRoutes = require('./routes/posts');
 const commentRoutes = require('./routes/comments');
@@ -47,7 +47,16 @@ app.use(express.json()); // parse application/json bodies
 app.use(express.urlencoded({ extended: true })); // parse form bodies
 
 // --- Health check ------------------------------------------------------------
-const healthCheck = (req, res) => {
+const healthCheck = async (req, res) => {
+  // A serverless cold start begins disconnected: nothing has queried yet. Open
+  // the connection here so this endpoint reports the real state (and so the
+  // first real request afterwards is fast). Failures are reported, not thrown.
+  try {
+    await connectDB();
+  } catch {
+    /* the "database" field below already describes the failure */
+  }
+
   res.status(200).json({
     success: true,
     message: 'Blog API is running',

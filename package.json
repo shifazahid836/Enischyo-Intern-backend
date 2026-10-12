@@ -4,6 +4,9 @@
   "private": true,
   "description": "REST API for the MERN job board (Node.js + Express + MongoDB Atlas + Mongoose).",
   "main": "server.js",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
