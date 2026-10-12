@@ -25,7 +25,8 @@ const cors = require('./middleware/cors');
 const { morganLogger, requestLogger } = require('./middleware/logger');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 const requireDatabase = require('./middleware/requireDatabase');
-const { connectDB, getConnectionState } = require('./config/db');
+const { connectDB, getConnectionState, describeMongoUri } = require('./config/db');
+const { isJwtConfigured } = require('./utils/jwt');
 
 const postRoutes = require('./routes/posts');
 const commentRoutes = require('./routes/comments');
@@ -47,6 +48,26 @@ app.use(express.json()); // parse application/json bodies
 app.use(express.urlencoded({ extended: true })); // parse form bodies
 
 // --- Health check ------------------------------------------------------------
+
+/**
+ * Reports whether the environment is configured, never what it contains.
+ *
+ * Attached to GET /health only while the database is unreachable, so a
+ * misconfigured deployment can be diagnosed from the outside instead of by
+ * guessing in the hosting dashboard. Every value here is a fixed status
+ * string — no secret, host or credential is ever echoed.
+ *
+ * @returns {Record<string, string>}
+ */
+function describeConfiguration() {
+  return {
+    MONGODB_URI: describeMongoUri(),
+    JWT_SECRET: isJwtConfigured() ? 'ok' : 'missing or shorter than 32 characters',
+    NODE_ENV: process.env.NODE_ENV || 'not set',
+    CORS_ORIGIN: process.env.CORS_ORIGIN ? 'set' : 'not set (defaults to *)',
+  };
+}
+
 const healthCheck = async (req, res) => {
   // A serverless cold start begins disconnected: nothing has queried yet. Open
   // the connection here so this endpoint reports the real state (and so the
@@ -57,12 +78,15 @@ const healthCheck = async (req, res) => {
     /* the "database" field below already describes the failure */
   }
 
+  const database = getConnectionState();
+
   res.status(200).json({
     success: true,
     message: 'Blog API is running',
     service: 'Job Board API (MongoDB + Mongoose)',
     environment: process.env.NODE_ENV || 'development',
-    database: getConnectionState(), // connected | connecting | disconnected
+    database, // connected | connecting | disconnected
+    ...(database === 'connected' ? {} : { configuration: describeConfiguration() }),
     timestamp: new Date().toISOString(),
   });
 };

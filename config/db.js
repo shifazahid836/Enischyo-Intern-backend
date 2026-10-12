@@ -125,10 +125,35 @@ function getConnectionState() {
   return states[mongoose.connection.readyState] || 'unknown';
 }
 
+/**
+ * Describes MONGODB_URI for GET /health WITHOUT revealing any part of it.
+ *
+ * A deployed API that cannot reach its database is otherwise impossible to
+ * diagnose from the outside — you end up guessing in the hosting dashboard.
+ * This reports only whether the variable exists and whether its shape is
+ * usable, never the value, the host or the credentials.
+ *
+ * @returns {string} a short, value-free status
+ */
+function describeMongoUri() {
+  const raw = process.env.MONGODB_URI;
+
+  if (raw === undefined) return 'not set in this environment';
+  if (typeof raw !== 'string' || raw.trim() === '') return 'set but empty';
+
+  // The most common deployment mistake: a value copied as "VAR= value".
+  if (raw !== raw.trim()) return 'set but has leading/trailing whitespace';
+  if (/^["']/.test(raw)) return 'set but wrapped in quotes';
+  if (!raw.startsWith('mongodb')) return 'set but does not start with "mongodb"';
+
+  return 'ok';
+}
+
 module.exports = {
   connectDB,
   disconnectDB,
   isDatabaseConnected,
   getConnectionState,
+  describeMongoUri,
   mongoose,
 };
