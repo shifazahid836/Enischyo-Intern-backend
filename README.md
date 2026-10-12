@@ -238,6 +238,51 @@ be "less valid" than data sent over HTTP.
 
 ---
 
+## ➕ Adding more jobs on top (`npm run add-jobs`)
+
+`seed.js` is all-or-nothing — it clears the collections before inserting its fixed
+15 jobs. When you only want **more** postings, use `add-jobs.js`:
+
+```bash
+npm run add-jobs         # adds 20 postings (default)
+npm run add-jobs 35      # adds 35
+# or: node add-jobs.js 20
+```
+
+It **never deletes anything** — existing users, companies, jobs and applications
+are left exactly as they are, so it is safe to run against a live database.
+
+The postings are generated **dynamically** rather than being a second hard-coded
+list. Each one rotates through:
+
+| Field | Taken from |
+| --- | --- |
+| `title`, `requirements`, summary | the next of the 30 role templates |
+| `company` | the companies already in the database, round-robin |
+| `employer` | the existing employer accounts, round-robin |
+| `location` | 12 locations, one per posting |
+| `type` | `full-time` → `remote` → `part-time`, repeating |
+| `salaryMin` / `salaryMax` | the band for that template's seniority (`junior` … `lead`) |
+| `postedDate` / `deadline` | spread over the last two weeks / 30–66 days ahead |
+
+Titles that already exist are **skipped**, so running the script twice adds a
+fresh batch instead of duplicates. Every document goes through `Job.create()`,
+so it passes the same Mongoose validation as a posting made over HTTP.
+
+```
+⏳ Connecting to MongoDB...
+✅ MongoDB connected (database: enischyo-internship)
+✅ Inserted 20 postings (20 requested).
+   Jobs before: 15
+   Jobs after:  35  (33 active)
+```
+
+> ⚠️ `npm run test:api` calls `seedDatabase()` and therefore **wipes** these
+> additions — it re-creates the original 15-job fixture. Re-run
+> `npm run add-jobs` afterwards if you want them back.
+
+---
+
 ## ▶️ Running the server
 
 ```bash
