@@ -329,6 +329,17 @@ Every route is available both at the root (`/jobs`) and under `/api` (`/api/jobs
 
 🔒 = needs `Authorization: Bearer <token>` · 👤 = additionally needs a specific role or ownership.
 
+### Service index
+
+| Method | Endpoint | Auth | Description |
+| --- | --- | --- | --- |
+| `GET` | `/` and `/api` | public | Human-readable map of the service: name, environment, database state and every endpoint below |
+
+Opening the deployed base URL therefore explains itself, instead of answering
+`{"success":false,"message":"Route not found","method":"GET","path":"/"}` and
+looking broken. It keeps working while the database is down — it only reports
+the connection state, it does not need a working one.
+
 ### Auth
 
 | Method | Endpoint | Auth | Description |

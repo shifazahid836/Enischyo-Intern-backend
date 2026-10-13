@@ -94,6 +94,85 @@ const healthCheck = async (req, res) => {
 app.get('/health', healthCheck);
 app.get('/api/health', healthCheck);
 
+// --- API index ---------------------------------------------------------------
+/**
+ * GET / and GET /api — a short, human-readable map of the service.
+ *
+ * Opening a deployed base URL used to answer
+ * `{"success":false,"message":"Route not found","method":"GET","path":"/"}`,
+ * simply because no root route existed. That reads like a broken deployment
+ * even when every real endpoint is healthy, so the root is now self-describing.
+ *
+ * It stays useful when the database is down: the handler only reports the
+ * connection state, it does not need a working one.
+ */
+const apiIndex = async (req, res) => {
+  // A serverless cold start begins disconnected: warm the connection so the
+  // state below is accurate instead of a misleading "disconnected".
+  try {
+    await connectDB();
+  } catch {
+    /* the "database" field below already describes the failure */
+  }
+
+  res.status(200).json({
+    success: true,
+    service: 'TechJobs — Job Board API',
+    description:
+      'REST API for the TechJobs job board: jobs, companies and applications, ' +
+      'JWT authentication with roles, plus the original blog endpoints.',
+    environment: process.env.NODE_ENV || 'development',
+    database: getConnectionState(),
+    health: '/health',
+    docs: 'https://github.com/shifazahid836/Enischyo-Intern-backend#-api-endpoints',
+    note: 'Every resource is also mounted without the /api prefix, e.g. GET /jobs.',
+    endpoints: {
+      auth: [
+        'POST   /api/auth/register',
+        'POST   /api/auth/login',
+        'GET    /api/auth/me                    (token)',
+        'PATCH  /api/auth/change-password       (token)',
+        'GET    /api/auth/users                 (admin)',
+        'DELETE /api/auth/users/:id             (admin)',
+      ],
+      jobs: [
+        'GET    /api/jobs                       ?keyword=&location=&type=&company=&isActive=',
+        'GET    /api/jobs/:id',
+        'POST   /api/jobs                       (employer)',
+        'PUT    /api/jobs/:id                   (owning employer)',
+        'DELETE /api/jobs/:id                   (owning employer or admin)',
+      ],
+      companies: [
+        'GET    /api/companies',
+        'GET    /api/companies/:id',
+        'POST   /api/companies',
+        'PUT    /api/companies/:id',
+        'DELETE /api/companies/:id              (admin)',
+      ],
+      applications: [
+        'GET    /api/applications',
+        'GET    /api/applications/:id',
+        'POST   /api/applications               (jobseeker)',
+        'PUT    /api/applications/:id           (admin)',
+        'DELETE /api/applications/:id           (admin)',
+      ],
+      posts: [
+        'GET    /api/posts',
+        'GET    /api/posts/:id',
+        'POST   /api/posts',
+        'PUT    /api/posts/:id',
+        'DELETE /api/posts/:id                  (admin)',
+        'GET    /api/posts/:id/comments',
+        'POST   /api/posts/:id/comments',
+      ],
+      comments: ['DELETE /api/comments/:id              (admin)'],
+    },
+  });
+};
+
+app.get('/', apiIndex);
+app.get('/api', apiIndex);
+
 // --- API routes --------------------------------------------------------------
 /**
  * Routes are mounted under both "/" and "/api" so that:
