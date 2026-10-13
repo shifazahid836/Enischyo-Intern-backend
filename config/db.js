@@ -63,10 +63,20 @@ function attachConnectionListeners() {
  * @throws {Error} when MONGODB_URI is missing/invalid or the server is unreachable
  */
 async function connectDB(uri = process.env.MONGODB_URI) {
-  if (!uri || typeof uri !== 'string' || !uri.startsWith('mongodb')) {
+  // Trim before validating. A value stored as "MONGODB_URI= mongodb+srv://…"
+  // (note the space) is a real-world footgun: dotenv strips it when reading a
+  // .env file, but a hosting dashboard keeps the space as part of the value,
+  // which used to fail this check with a confusing "missing or invalid" error.
+  const connectionString = typeof uri === 'string' ? uri.trim() : uri;
+
+  if (
+    !connectionString ||
+    typeof connectionString !== 'string' ||
+    !connectionString.startsWith('mongodb')
+  ) {
     throw new Error(
-      'MONGODB_URI is missing or invalid. Create backend/.env and add your ' +
-        'MongoDB Atlas connection string (see .env.example).'
+      'MONGODB_URI is missing or invalid. Add your MongoDB Atlas connection string ' +
+        'to backend/.env (see .env.example), or set MONGODB_URI in your hosting provider.'
     );
   }
 
@@ -86,7 +96,7 @@ async function connectDB(uri = process.env.MONGODB_URI) {
   intentionalDisconnect = false;
 
   pendingConnection = mongoose
-    .connect(uri, {
+    .connect(connectionString, {
       serverSelectionTimeoutMS: CONNECT_TIMEOUT_MS,
     })
     .then(() => mongoose.connection)
@@ -141,10 +151,13 @@ function describeMongoUri() {
   if (raw === undefined) return 'not set in this environment';
   if (typeof raw !== 'string' || raw.trim() === '') return 'set but empty';
 
-  // The most common deployment mistake: a value copied as "VAR= value".
-  if (raw !== raw.trim()) return 'set but has leading/trailing whitespace';
-  if (/^["']/.test(raw)) return 'set but wrapped in quotes';
-  if (!raw.startsWith('mongodb')) return 'set but does not start with "mongodb"';
+  const value = raw.trim();
+
+  if (/^["']/.test(value)) return 'set but wrapped in quotes';
+  if (!value.startsWith('mongodb')) return 'set but does not start with "mongodb"';
+
+  // Worth reporting, but no longer fatal — connectDB() trims the value.
+  if (raw !== value) return 'ok (surrounding whitespace is trimmed automatically)';
 
   return 'ok';
 }

@@ -448,6 +448,31 @@ The response always echoes the filters that were applied and always populates th
 | --- | --- | --- |
 | `GET` | `/health` | Server status + **database state** (works even when Atlas is down) |
 
+While the database is unreachable the response also carries a `configuration`
+block that describes **how** the environment is set up — never the values, so it
+is safe to leave enabled in production:
+
+```json
+{
+  "success": true,
+  "database": "disconnected",
+  "configuration": {
+    "MONGODB_URI": "not set in this environment",
+    "JWT_SECRET": "missing or shorter than 32 characters",
+    "NODE_ENV": "not set",
+    "CORS_ORIGIN": "not set (defaults to *)"
+  }
+}
+```
+
+`MONGODB_URI` reports exactly one of: `not set in this environment`,
+`set but empty`, `set but wrapped in quotes`,
+`set but does not start with "mongodb"`,
+`ok (surrounding whitespace is trimmed automatically)`, or `ok`. A deployed API
+that cannot reach its database is then diagnosable from the outside instead of
+by guessing in the hosting dashboard. The block disappears once the connection
+succeeds.
+
 ---
 
 ## 🔐 Authentication, roles & protected routes
@@ -814,6 +839,9 @@ All errors use the same JSON shape, produced by `middleware/errorHandler.js`:
 
 - The connection string lives **only** in `backend/.env` — there is no hard-coded URI
   anywhere in the source code (`config/db.js` reads `process.env.MONGODB_URI`).
+- `connectDB()` trims `MONGODB_URI` before using it, so a value pasted with a stray
+  space (`MONGODB_URI= mongodb+srv://…`) still connects. `/health` reports such a
+  value as `ok (surrounding whitespace is trimmed automatically)`.
 - `JWT_SECRET` also lives only in `.env` (`utils/jwt.js` reads `process.env.JWT_SECRET`).
   Anyone who knows it can mint a token for **any** user, so treat it like a password:
   at least 32 random characters, different per environment. Generate one with:
@@ -931,6 +959,9 @@ answer.
 | Problem | Cause & fix |
 | --- | --- |
 | `MONGODB_URI is missing or invalid` | `.env` is missing or the variable is empty. Copy `.env.example` → `.env` and paste your string. |
+| Deployed API returns `503` and `/health` reports `"MONGODB_URI": "not set in this environment"` | The host has no `MONGODB_URI`, or it is set for the wrong environment (for example only **Preview**). Add it to **Production** and then redeploy — environment variables are injected when a deployment is built, so saving alone changes nothing. |
+| `/health` reports `"MONGODB_URI": "set but wrapped in quotes"` | The dashboard value contains `"` or `'`. Paste the connection string on its own, without quotes. |
+| The connection string was pasted as `MONGODB_URI= mongodb+srv://…` | No longer a problem: `connectDB()` trims the value, so surrounding whitespace is ignored and `/health` reports `ok (surrounding whitespace is trimmed automatically)`. |
 | `MongooseServerSelectionError` / `Could not connect to MongoDB` | Atlas **Network Access** does not allow your IP. Add `0.0.0.0/0` (development) and wait ~1 minute. |
 | `Authentication failed` | Wrong username/password in the URI, or the password is not URL-encoded (`@` → `%40`). |
 | Every request returns `503` | The server started without a database connection. Fix `.env`, then restart. |
